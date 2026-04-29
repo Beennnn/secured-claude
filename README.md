@@ -16,7 +16,7 @@
 <p align="center"><b>The comfort of Claude Code, secured by design.</b></p>
 
 <p align="center">
-  <a href="https://gitlab.com/secured-claude/secured-claude/-/pipelines"><img src="https://gitlab.com/secured-claude/secured-claude/badges/main/pipeline.svg" alt="pipeline"></a>
+  <a href="https://gitlab.com/benoit.besson/secured-claude/-/pipelines"><img src="https://gitlab.com/benoit.besson/secured-claude/badges/main/pipeline.svg" alt="pipeline"></a>
   <a href="docs/SECURITY.md"><img src="https://img.shields.io/badge/security--audit-pass-brightgreen" alt="security audit"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="python"></a>
@@ -149,10 +149,10 @@ Claude Code is the most ergonomic agentic CLI today — but for **enterprise ado
 
 ```bash
 # Mac / Linux
-curl -sSL https://gitlab.com/secured-claude/secured-claude/-/raw/main/install.sh | bash
+curl -sSL https://gitlab.com/benoit.besson/secured-claude/-/raw/main/install.sh | bash
 
 # Windows (PowerShell)
-irm https://gitlab.com/secured-claude/secured-claude/-/raw/main/install.ps1 | iex
+irm https://gitlab.com/benoit.besson/secured-claude/-/raw/main/install.ps1 | iex
 
 # Then:
 export ANTHROPIC_API_KEY=sk-ant-...

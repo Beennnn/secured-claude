@@ -66,10 +66,10 @@ secured-claude = "secured_claude.cli:main"
 secured-claude-hook = "secured_claude.hook:main"
 
 [project.urls]
-Homepage = "https://gitlab.com/secured-claude/secured-claude"
-Repository = "https://gitlab.com/secured-claude/secured-claude"
-Documentation = "https://gitlab.com/secured-claude/secured-claude/-/blob/main/README.md"
-Issues = "https://gitlab.com/secured-claude/secured-claude/-/issues"
+Homepage = "https://gitlab.com/benoit.besson/secured-claude"
+Repository = "https://gitlab.com/benoit.besson/secured-claude"
+Documentation = "https://gitlab.com/benoit.besson/secured-claude/-/blob/main/README.md"
+Issues = "https://gitlab.com/benoit.besson/secured-claude/-/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/secured_claude"]
