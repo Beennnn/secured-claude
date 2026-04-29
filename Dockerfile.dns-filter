@@ -13,9 +13,12 @@ FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6
 # version matches the docker-compose v0.2 boot-time install we're replacing.
 RUN apk add --no-cache dnsmasq=2.90-r3
 
-# dnsmasq runs as root by default (needs CAP_NET_BIND_SERVICE for port 53).
-# read_only:true + tmpfs for /tmp + /var/run handle the writable-paths gap.
-# The compose file constrains capabilities to just what dnsmasq needs.
+# Run as the unprivileged `nobody` user (uid 65534) — the alpine dnsmasq
+# package creates a `dnsmasq` user (uid 100) but its home is /dev/null which
+# dnsmasq can't write its run-state in. nobody works because we mount tmpfs
+# for /tmp + /var/run in compose. Trivy DS-0002 (Image user should not be
+# 'root') is satisfied. CAP_NET_BIND_SERVICE in compose lets us bind 53.
+USER nobody
 
 # Foreground (-k) so docker-compose sees the process and the healthcheck
 # (nslookup api.anthropic.com 127.0.0.1) gets a live target.

@@ -12,8 +12,13 @@ FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6
 
 # tinyproxy runs as the `tinyproxy` user (uid 100 in alpine's package). The
 # compose file's read_only:true + tmpfs for /var/log/tinyproxy + /run/tinyproxy
-# handles the writable-paths gap. CAP_NET_BIND_SERVICE not needed (port 3128).
+# handles the writable-paths gap. CAP_NET_BIND_SERVICE not needed (port 3128
+# is unprivileged).
 RUN apk add --no-cache tinyproxy=1.11.2-r0
+
+# Run as the unprivileged `tinyproxy` user from the start (uid 100). Trivy
+# DS-0002 (Image user should not be 'root') is satisfied.
+USER tinyproxy
 
 # Foreground (-d) for docker-compose process supervision + log streaming.
 ENTRYPOINT ["tinyproxy", "-d", "-c", "/etc/tinyproxy/tinyproxy.conf"]
