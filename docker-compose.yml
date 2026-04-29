@@ -22,7 +22,7 @@ services:
     image: cerbos/cerbos:0.42.0
     container_name: secured-claude-cerbos
     restart: unless-stopped
-    user: "1000:1000"
+    user: "1001:1001"
     read_only: true
     cap_drop: [ALL]
     security_opt:
@@ -56,7 +56,7 @@ services:
     depends_on:
       cerbos:
         condition: service_healthy
-    user: "1000:1000"
+    user: "1001:1001"
     # NOTE: read_only=true is enabled by default in production. Keeping
     # writable here lets `claude /resume` persist session state under
     # /home/agent/.claude. Switch to `read_only: true` + tmpfs once the
@@ -70,7 +70,8 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY must be set in .env}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       SECURED_CLAUDE_BROKER: http://host.docker.internal:8765
       SECURED_CLAUDE_PRINCIPAL: ${SECURED_CLAUDE_PRINCIPAL:-claude-code-default}
       TERM: ${TERM:-xterm-256color}
@@ -84,11 +85,16 @@ services:
       - secured-claude-net
     stdin_open: true
     tty: true
-    deploy:
-      resources:
-        limits:
-          memory: 2g
-          cpus: "2.0"
+    # Keep the container alive so `secured-claude run` / `exec` can `docker
+    # exec claude -p ...` against a long-lived process. The default CMD
+    # `claude` would invoke the first-run interactive wizard and exit when
+    # no TTY is attached.
+    command: ["sleep", "infinity"]
+    # Memory limit bumped to 4G after observing OOMKill (exit 137) on
+    # claude -p invocations during the v0.1 smoke test. Claude Code's Node
+    # runtime + JIT seems to need > 2G headroom even for short prompts.
+    mem_limit: 4g
+    cpus: 2.0
 
 networks:
   secured-claude-net:

@@ -13,11 +13,14 @@ if [[ ! -f "${SETTINGS}" ]]; then
     cp "${TEMPLATE}" "${SETTINGS}"
 fi
 
-# Sanity-check the API key before we hand off to claude. claude itself will
-# also error if missing, but failing here gives a clearer message.
-if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-    echo "ANTHROPIC_API_KEY is not set in the container environment." >&2
-    echo "Fill .env from .env.example then re-run \`secured-claude up\`." >&2
+# Sanity-check that an Anthropic credential is present. Either is accepted :
+#   ANTHROPIC_API_KEY        — sk-ant-api03-...  (regular API key)
+#   CLAUDE_CODE_OAUTH_TOKEN  — sk-ant-oat01-...  (Claude Code OAuth, e.g. from
+#                               an active claude.ai/code subscription)
+# claude binary picks the right one ; we just need at least one.
+if [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+    echo "Neither ANTHROPIC_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is set." >&2
+    echo "Set one in your .env (copy from .env.example) and re-run \`secured-claude up\`." >&2
     exit 78  # EX_CONFIG (sysexits.h)
 fi
 

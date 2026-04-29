@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """PreToolUse hook for Claude Code (ADR-0002, ADR-0009).
 
 Runs INSIDE the agent container. Reads the tool intent JSON from stdin,
@@ -6,6 +7,9 @@ stdout. Fails closed (DENY) on any error per ADR-0009.
 
 This file is also installed into the container image as the binary
 `secured-claude-hook` via the pyproject.toml `project.scripts` entry.
+The shebang above is essential when invoked as a Claude Code hook : the
+hook system runs the file directly (no `python` prefix), so without the
+shebang bash would parse it as shell and fail.
 """
 
 from __future__ import annotations
