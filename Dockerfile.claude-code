@@ -3,14 +3,21 @@
 # the secured-claude policy gate. See ADR-0005 (containerised Claude Code), ADR-0010
 # (network egress allowlist), ADR-0012 (defense-in-depth layers L3+L4).
 #
-# Build :
-#   docker buildx build --platform linux/amd64,linux/arm64 \
-#     -t secured-claude/claude-code:vX.Y.Z -f Dockerfile.claude-code .
+# Build (CI uses Kaniko since the macbook-local runner's docker.sock can't dial
+# the daemon ; see .gitlab-ci/build.yml) :
+#   docker build -t secured-claude/claude-code:vX.Y.Z -f Dockerfile.claude-code .
+#
 # Digest pin per ADR-0008 (no floating tags). Tag retained for human readability.
+#
+# Layer order is deliberate : least-changing → most-changing. Renovate bumps and
+# commits to hook.py / entrypoint.sh should hit the cache for everything above.
+
 FROM node:22-slim@sha256:d415caac2f1f77b98caaf9415c5f807e14bc8d7bdea62561ea2fef4fbd08a73c
 
-# Pin OS packages where Debian provides ABI guarantees ; ca-certificates,
-# python3, requests are the runtime needs of the secured-claude-hook.
+# ── Layer 1 (~rare changes) : OS packages ──────────────────────────────────
+# Debian APT pin would tighten this further but the digest pin on the base
+# image already locks the package set ABI. Renovate's `:dockerfile` rule
+# can be extended to run apt-update advisories.
 # hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -22,37 +29,40 @@ RUN apt-get update \
         tini \
  && rm -rf /var/lib/apt/lists/*
 
-# Install Python `requests` for the hook script. We use --break-system-packages
-# to install in the system site-packages — fine inside a container ; the
-# distinction "system Python" vs "user venv" doesn't apply here. The hook
-# only needs `requests` ; the broker side keeps its own venv on the host.
+# ── Layer 2 (rare) : Python `requests` for the hook script ─────────────────
+# --break-system-packages is fine inside a single-purpose container ; the
+# host-side broker keeps its own venv (uv-managed) and never shares state.
 RUN pip3 install --no-cache-dir --break-system-packages requests==2.32.5
 
-# Install the official Claude Code CLI globally. Pinning to a tag keeps the
-# image reproducible (ADR-0008). Renovate bumps this regularly.
+# ── Layer 3 (rare) : Claude Code CLI ───────────────────────────────────────
+# Pinned to a major version that we've audited. Renovate bumps regularly ;
+# the rebuild is fast because layers 1+2 above are cached.
 RUN npm install -g --no-audit --no-fund @anthropic-ai/claude-code@latest \
  && npm cache clean --force
 
-# Embed the secured-claude-hook binary. The hook is read-only ; in a
-# downgrade attack (attacker tries to overwrite it) the container's read-only
-# rootfs (set in docker-compose.yml) prevents the write.
-COPY src/secured_claude/hook.py /usr/local/bin/secured-claude-hook
-RUN chmod 0755 /usr/local/bin/secured-claude-hook
-
-# Inject the Claude Code settings template + entrypoint that materializes the
-# real settings.json from the template at first run.
-COPY docker/settings.template.json /etc/secured-claude/settings.template.json
-COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod 0755 /entrypoint.sh
-
-# Run as non-root (ADR-0005, L4 hardening). UID/GID 1001 is the conventional
-# first user on Debian-derived images.
+# ── Layer 4 (rare) : non-root user + write paths ───────────────────────────
+# UID/GID 1001 chosen to avoid collision with node:22-slim's existing
+# `node` user at GID 1000. ADR-0005 requires non-root.
 RUN groupadd -g 1001 agent \
  && useradd -m -u 1001 -g 1001 -s /bin/bash agent \
- && mkdir -p /workspace /home/agent/.claude/projects \
+ && mkdir -p /workspace /home/agent/.claude/projects /etc/secured-claude \
  && chown -R agent:agent /workspace /home/agent
-USER agent
 
+# ── Layer 5 (rare ; only on settings/entrypoint changes) ───────────────────
+# Static config (settings template, entrypoint). COPY --chmod sets perms in
+# the same layer ; supported by both Docker BuildKit and Kaniko.
+COPY --chmod=0644 docker/settings.template.json /etc/secured-claude/settings.template.json
+COPY --chmod=0755 docker/entrypoint.sh /entrypoint.sh
+
+# ── Layer 6 (most volatile ; tracks src/secured_claude/hook.py) ────────────
+# The hook script is the surface that changes most often during dev. Putting
+# it last means hook-only edits don't re-run apt/npm/useradd. The shebang
+# at the top of hook.py (#!/usr/bin/env python3) is mandatory — see
+# docs/dev/developer-environment.md §"Lessons from v0.1.1 runtime smoke".
+COPY --chmod=0755 src/secured_claude/hook.py /usr/local/bin/secured-claude-hook
+
+# ── Runtime config ─────────────────────────────────────────────────────────
+USER agent
 WORKDIR /workspace
 ENV HOME=/home/agent \
     SECURED_CLAUDE_BROKER=http://host.docker.internal:8765 \
