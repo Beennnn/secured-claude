@@ -29,7 +29,7 @@
 
 ## Status — verify in 60 seconds
 
-**v0.1.1** — every claim below is backed by an artifact you can re-run yourself.
+**v0.2.0** — every claim below is backed by an artifact you can re-run yourself.
 **Don't trust the README, run the verifications.**
 
 ```bash
@@ -64,7 +64,7 @@ secured-claude audit --denied
 #     5 ms duration, with cerbos_reason captured.
 ```
 
-### What is real now (v0.1.1)
+### What is real now (v0.2.0)
 
 | Claim | Where | How to check |
 |---|---|---|
@@ -72,7 +72,7 @@ secured-claude audit --denied
 | FastAPI broker on host:8765 | `src/secured_claude/gateway.py` (75 lines, 100 % covered) | `tests/test_gateway.py` (8 tests) |
 | Append-only SQLite audit | `src/secured_claude/store.py` (85 lines, 98 % covered) | `tests/test_store.py` includes UPDATE/DELETE refused by trigger |
 | Claude Code container hardened | `Dockerfile.claude-code` + `docker-compose.yml` (non-root UID 1001, read-only cerbos rootfs, cap_drop ALL, healthcheck) | `secured-claude doctor`, `secured-claude up` |
-| 17 ADRs justifying every decision | `docs/adr/0000-template.md` + `0001..0017-*.md` | `ls docs/adr/` |
+| 21 ADRs justifying every decision | `docs/adr/0000-template.md` + `0001..0021-*.md` | `ls docs/adr/` |
 | GitLab CI green on macbook-local runner | `.gitlab-ci.yml` + `.gitlab-ci/{lint,test,security,build,publish,release}.yml` | [pipeline #2487406196](https://gitlab.com/benoit.besson/secured-claude/-/pipelines/2487406196) |
 | 7-layer security pipeline | `bin/security-scans.sh` + `pyproject.toml [tool.bandit]` | `bash bin/security-scans.sh` |
 | SBOM (SPDX 2.3) per release | `.gitlab-ci/security.yml::security:sbom` | release artifact `sbom.spdx.json` |
