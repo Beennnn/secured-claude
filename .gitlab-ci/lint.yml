@@ -91,9 +91,10 @@ lint:cerbos-compile:
         aarch64|arm64) arch_tag="Linux_arm64" ;;
         *) echo "unsupported arch: $a" ; exit 2 ;;
       esac
+      mkdir -p /tmp/cerbos-bin
       curl -fsSL "https://github.com/cerbos/cerbos/releases/download/v${CERBOS_VERSION}/cerbos_${CERBOS_VERSION}_${arch_tag}.tar.gz" \
-        | tar -xz cerbos
-    - ./cerbos compile policies/
+        | tar -xz -C /tmp/cerbos-bin cerbos
+    - /tmp/cerbos-bin/cerbos compile policies/
 
 # ---------------------------------------------------------------------------
 # Conventional Commits — verify all commits follow CC 1.0
