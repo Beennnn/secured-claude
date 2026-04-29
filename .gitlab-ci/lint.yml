@@ -74,12 +74,16 @@ lint:shellcheck:
 # ---------------------------------------------------------------------------
 
 lint:cerbos-compile:
+  # Cerbos image is distroless (no shell), so GitLab CI can't wrap the script.
+  # We use docker:27 + DinD and call cerbos in a sub-container instead.
   stage: lint
-  image:
-    name: cerbos/cerbos:0.42.0
-    entrypoint: [""]
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
   script:
-    - /cerbos compile /builds/$CI_PROJECT_PATH/policies || cerbos compile $CI_PROJECT_DIR/policies
+    - docker run --rm -v "$CI_PROJECT_DIR/policies:/policies:ro" cerbos/cerbos:0.42.0 compile /policies
 
 # ---------------------------------------------------------------------------
 # Conventional Commits — verify all commits follow CC 1.0

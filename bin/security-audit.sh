@@ -23,6 +23,7 @@ REPORT_DIR="${REPORT_DIR:-${REPO_ROOT}/audit-reports}"
 REPORT_PATH="${REPORT_DIR}/audit-${TS}.md"
 mkdir -p "${REPORT_DIR}"
 
+# shellcheck disable=SC2329  # invoked by `trap cleanup EXIT`, not statically detectable
 cleanup() {
     if docker ps -a --format '{{.Names}}' | grep -q "^${CERBOS_NAME}$"; then
         docker rm -f "${CERBOS_NAME}" >/dev/null 2>&1 || true
