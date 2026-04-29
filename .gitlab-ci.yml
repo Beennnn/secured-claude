@@ -14,6 +14,7 @@ stages:
   - test            # pytest matrix (3.11 / 3.12 / 3.13) + coverage gate ≥ 90%
   - security        # bandit, pip-audit, gitleaks, grype, trivy, audit-demo, sbom
   - build           # uv build (wheel + sdist) + docker buildx
+  - smoke           # runtime smoke against just-built images (ADR-0026)
   - publish         # GitLab Package Registry (PyPI), Container Registry, cosign
   - release         # GitLab Release with CHANGELOG + signed assets (only on tags)
 
@@ -79,6 +80,7 @@ include:
   - local: .gitlab-ci/test.yml
   - local: .gitlab-ci/security.yml
   - local: .gitlab-ci/build.yml
+  - local: .gitlab-ci/smoke.yml
   - local: .gitlab-ci/publish.yml
   - local: .gitlab-ci/release.yml
 
