@@ -1,0 +1,201 @@
+"""Tests for the PrincipalProvider abstraction (ADR-0034)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import responses
+
+from secured_claude.principals import (
+    DEFAULT_PRINCIPAL,
+    DEFAULT_PRINCIPAL_ID,
+    HTTPPrincipalProvider,
+    YAMLPrincipalProvider,
+    make_provider,
+)
+
+# ────────────────────────────────────────────────────────────────────
+# YAMLPrincipalProvider — same behaviour as v0.3.1's load_principals
+# ────────────────────────────────────────────────────────────────────
+
+
+def test_yaml_provider_reads_valid_file(tmp_path: Path) -> None:
+    p = tmp_path / "ok.yaml"
+    p.write_text(
+        """
+principals:
+  alice:
+    roles: [agent, claude_agent]
+    attributes:
+      trust_level: 1
+""",
+        encoding="utf-8",
+    )
+    out = YAMLPrincipalProvider(p).load()
+    assert "alice" in out
+    assert out["alice"]["roles"] == ["agent", "claude_agent"]
+    assert out["alice"]["attributes"]["trust_level"] == 1
+    # Default always injected for safety
+    assert DEFAULT_PRINCIPAL_ID in out
+
+
+def test_yaml_provider_missing_file_returns_fallback(tmp_path: Path) -> None:
+    out = YAMLPrincipalProvider(tmp_path / "missing.yaml").load()
+    assert out == {DEFAULT_PRINCIPAL_ID: DEFAULT_PRINCIPAL}
+
+
+def test_yaml_provider_malformed_returns_fallback(tmp_path: Path) -> None:
+    p = tmp_path / "bad.yaml"
+    p.write_text("principals:\n  - invalid:: not\n  malformed: [\n", encoding="utf-8")
+    out = YAMLPrincipalProvider(p).load()
+    assert out == {DEFAULT_PRINCIPAL_ID: DEFAULT_PRINCIPAL}
+
+
+def test_yaml_provider_skips_invalid_entries(tmp_path: Path) -> None:
+    p = tmp_path / "mixed.yaml"
+    p.write_text(
+        """
+principals:
+  good:
+    roles: [agent, claude_agent]
+    attributes: {trust_level: 1}
+  bad-roles:
+    roles: "not a list"
+    attributes: {}
+  not-a-mapping: 42
+""",
+        encoding="utf-8",
+    )
+    out = YAMLPrincipalProvider(p).load()
+    assert "good" in out
+    assert "bad-roles" not in out
+    assert "not-a-mapping" not in out
+    assert DEFAULT_PRINCIPAL_ID in out
+
+
+# ────────────────────────────────────────────────────────────────────
+# HTTPPrincipalProvider — fetches from a URL (mocked via responses)
+# ────────────────────────────────────────────────────────────────────
+
+
+@responses.activate
+def test_http_provider_fetches_json() -> None:
+    body = {
+        "principals": {
+            "alice": {"roles": ["agent", "claude_agent"], "attributes": {"trust_level": 2}},
+            "bob": {"roles": ["agent", "claude_agent"], "attributes": {"trust_level": 0}},
+        }
+    }
+    responses.add(responses.GET, "http://idp.example.com/principals", json=body, status=200)
+    out = HTTPPrincipalProvider("http://idp.example.com/principals").load()
+    assert "alice" in out
+    assert out["alice"]["attributes"]["trust_level"] == 2
+    assert "bob" in out
+    assert DEFAULT_PRINCIPAL_ID in out
+
+
+@responses.activate
+def test_http_provider_fetches_yaml() -> None:
+    body = """
+principals:
+  alice:
+    roles: [agent, claude_agent]
+    attributes:
+      trust_level: 2
+"""
+    responses.add(
+        responses.GET,
+        "http://idp.example.com/principals.yaml",
+        body=body,
+        status=200,
+        content_type="application/x-yaml",
+    )
+    out = HTTPPrincipalProvider("http://idp.example.com/principals.yaml").load()
+    assert "alice" in out
+    assert out["alice"]["attributes"]["trust_level"] == 2
+
+
+@responses.activate
+def test_http_provider_returns_fallback_on_5xx() -> None:
+    responses.add(responses.GET, "http://idp.example.com/principals", status=503)
+    out = HTTPPrincipalProvider("http://idp.example.com/principals").load()
+    assert out == {DEFAULT_PRINCIPAL_ID: DEFAULT_PRINCIPAL}
+
+
+@responses.activate
+def test_http_provider_returns_fallback_on_unreachable() -> None:
+    # No `responses.add` for this URL → connection error → fallback.
+    out = HTTPPrincipalProvider("http://idp.unreachable.example/principals").load()
+    assert out == {DEFAULT_PRINCIPAL_ID: DEFAULT_PRINCIPAL}
+
+
+@responses.activate
+def test_http_provider_returns_fallback_on_invalid_json() -> None:
+    responses.add(
+        responses.GET,
+        "http://idp.example.com/principals",
+        body="<html>not json</html>",
+        status=200,
+    )
+    out = HTTPPrincipalProvider("http://idp.example.com/principals").load()
+    assert out == {DEFAULT_PRINCIPAL_ID: DEFAULT_PRINCIPAL}
+
+
+# ────────────────────────────────────────────────────────────────────
+# make_provider — env-driven selection
+# ────────────────────────────────────────────────────────────────────
+
+
+def test_make_provider_yaml_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SECURED_CLAUDE_IDP_URL", raising=False)
+    monkeypatch.delenv("SECURED_CLAUDE_PRINCIPALS", raising=False)
+    p = make_provider()
+    assert isinstance(p, YAMLPrincipalProvider)
+    assert p.path == Path("config/principals.yaml")
+
+
+def test_make_provider_yaml_with_env_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    custom = tmp_path / "custom.yaml"
+    custom.write_text("principals: {}\n", encoding="utf-8")
+    monkeypatch.delenv("SECURED_CLAUDE_IDP_URL", raising=False)
+    monkeypatch.setenv("SECURED_CLAUDE_PRINCIPALS", str(custom))
+    p = make_provider()
+    assert isinstance(p, YAMLPrincipalProvider)
+    assert p.path == custom
+
+
+def test_make_provider_http_when_idp_url_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_URL", "http://idp.example.com/principals")
+    p = make_provider()
+    assert isinstance(p, HTTPPrincipalProvider)
+    assert p.url == "http://idp.example.com/principals"
+    assert p.timeout_s == 5.0  # default
+
+
+def test_make_provider_http_with_custom_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_URL", "http://idp.example.com/principals")
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_TIMEOUT_S", "12")
+    p = make_provider()
+    assert isinstance(p, HTTPPrincipalProvider)
+    assert p.timeout_s == 12.0
+
+
+def test_make_provider_http_invalid_timeout_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_URL", "http://idp.example.com/principals")
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_TIMEOUT_S", "not-a-number")
+    p = make_provider()
+    assert isinstance(p, HTTPPrincipalProvider)
+    assert p.timeout_s == 5.0
+
+
+def test_make_provider_empty_idp_url_falls_through_to_yaml(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty SECURED_CLAUDE_IDP_URL is treated as unset (avoids surprises if
+    the operator left the env defined but blank in their compose)."""
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_URL", "")
+    p = make_provider()
+    assert isinstance(p, YAMLPrincipalProvider)

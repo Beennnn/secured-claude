@@ -1,7 +1,8 @@
 """FastAPI gateway — receives PreToolUse hook intents, queries Cerbos, logs to SQLite.
 
 Implements ADR-0001 (Cerbos PDP), ADR-0002 (hook interception), ADR-0004
-(append-only audit log), ADR-0009 (fail-closed), ADR-0027 (multi-principal).
+(append-only audit log), ADR-0009 (fail-closed), ADR-0027 (multi-principal),
+ADR-0034 (PrincipalProvider abstraction).
 """
 
 from __future__ import annotations
@@ -12,69 +13,33 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
-import yaml
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from secured_claude import __version__
 from secured_claude.cerbos_client import CerbosClient, CheckResult
+from secured_claude.principals import (
+    DEFAULT_PRINCIPAL as _DEFAULT_PRINCIPAL,
+)
+from secured_claude.principals import (
+    YAMLPrincipalProvider,
+    make_provider,
+)
 from secured_claude.store import Store
 
 log = logging.getLogger(__name__)
 
-# Default principal — matches the v0.1+v0.2 hardcoded behaviour. The
-# config/principals.yaml directory ships with this id mapped to roles=[agent],
-# trust_level=0, no scope. Callers that don't set SECURED_CLAUDE_PRINCIPAL
-# (or pass principal_id="claude-code-default") get this exact behaviour.
-_DEFAULT_PRINCIPAL_ID = "claude-code-default"
-_DEFAULT_PRINCIPAL: dict[str, Any] = {
-    # Both `agent` and `claude_agent` — Cerbos's parentRoles in
-    # derived_roles.yaml requires the derived role to be explicitly
-    # listed in the principal's roles. derived_roles still gates the
-    # `trusted_agent` (trust_level >= 1) and `auditor` (scope == "audit-only")
-    # roles via attribute conditions.
-    "roles": ["agent", "claude_agent"],
-    "attributes": {"trust_level": 0},
-}
-
 
 def load_principals(path: Path | None = None) -> dict[str, dict[str, Any]]:
-    """Load the principal directory from config/principals.yaml.
+    """Backward-compat shim around the v0.5 PrincipalProvider abstraction.
 
-    Returns a {principal_id → {roles, attributes}} mapping. Missing file or
-    malformed YAML returns the single-default-principal fallback (matches
-    pre-v0.3.1 hardcoded behaviour). Reading is best-effort : we never
-    fail-closed at startup over a missing principals file, only on
-    Cerbos calls themselves (ADR-0009).
+    Pre-v0.5 callers passed a Path ; this shim wraps a YAMLPrincipalProvider
+    around it. New code should call `make_provider().load()` directly to get
+    the env-driven YAML-vs-HTTP selection (ADR-0034).
     """
-    if path is None:
-        env = os.environ.get("SECURED_CLAUDE_PRINCIPALS")
-        path = Path(env) if env else Path("config/principals.yaml")
-    fallback = {_DEFAULT_PRINCIPAL_ID: _DEFAULT_PRINCIPAL}
-    if not path.exists():
-        log.info("principals file %s not found ; using single-default fallback", path)
-        return fallback
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError:
-        log.exception("principals file %s is malformed YAML ; using fallback", path)
-        return fallback
-    raw = data.get("principals") if isinstance(data, dict) else None
-    if not isinstance(raw, dict):
-        log.warning("principals file %s has no `principals:` key ; using fallback", path)
-        return fallback
-    out: dict[str, dict[str, Any]] = {}
-    for pid, entry in raw.items():
-        if not isinstance(entry, dict):
-            continue
-        roles = entry.get("roles") or ["agent"]
-        attributes = entry.get("attributes") or {}
-        if not isinstance(roles, list) or not isinstance(attributes, dict):
-            continue
-        out[str(pid)] = {"roles": [str(r) for r in roles], "attributes": dict(attributes)}
-    if _DEFAULT_PRINCIPAL_ID not in out:
-        out[_DEFAULT_PRINCIPAL_ID] = _DEFAULT_PRINCIPAL
-    return out
+    if path is not None:
+        return YAMLPrincipalProvider(path).load()
+    return make_provider().load()
 
 
 class CheckRequest(BaseModel):
