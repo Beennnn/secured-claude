@@ -1,0 +1,50 @@
+[Unit]
+# systemd template — daily audit-anchor on Linux (ADR-0029 + ADR-0032).
+#
+# Setup (per-user, runs in user systemd) :
+#   1. mkdir -p ~/.config/systemd/user
+#   2. Copy this file (without .example) to
+#      ~/.config/systemd/user/secured-claude-anchor.service
+#   3. Edit User= / ExecStart= for your install
+#   4. Copy the .timer file alongside
+#   5. systemctl --user daemon-reload
+#   6. systemctl --user enable --now secured-claude-anchor.timer
+#   7. Verify : systemctl --user list-timers | grep secured-claude
+#
+# Setup (system-wide, runs as root or a dedicated user) :
+#   Same as above but in /etc/systemd/system/ + drop --user from systemctl.
+
+Description=secured-claude — daily audit-log hash anchor (ADR-0029)
+Documentation=https://gitlab.com/benoit.besson/secured-claude/-/blob/main/docs/adr/0029-external-hash-anchor.md
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Replace with your actual install location.
+ExecStart=/usr/local/bin/secured-claude-anchor-wrapper.sh
+
+# Resource caps — anchor takes < 100 ms on a typical DB ; bound to
+# protect the host from a runaway.
+MemoryMax=256M
+CPUQuota=50%
+TimeoutStartSec=60s
+
+# Environment — same envs as the wrapper script reads.
+Environment="SECURED_CLAUDE_BIN=/usr/local/bin/secured-claude"
+Environment="SECURED_CLAUDE_ANCHOR_DIR=%h/.local/share/secured-claude/anchors"
+Environment="SECURED_CLAUDE_ANCHOR_RETENTION_DAYS=30"
+# Optional external sync :
+# Environment="SECURED_CLAUDE_ANCHOR_SYNC_CMD=aws s3 cp"
+
+# Hardening (paranoid mode) :
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/secured-claude
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native

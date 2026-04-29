@@ -1,0 +1,22 @@
+[Unit]
+# systemd timer for secured-claude-anchor.service — daily at 04:30 local.
+# Pair with secured-claude-anchor.service.example (same dir).
+
+Description=Trigger secured-claude audit-anchor daily
+Requires=secured-claude-anchor.service
+
+[Timer]
+# Daily at 04:30 local time (matches the launchd plist convention).
+OnCalendar=*-*-* 04:30:00
+
+# If the system was off at the scheduled time, run on next boot.
+Persistent=true
+
+# Random delay up to 5 min to avoid thundering-herd if many machines
+# share the same timer schedule. Optional ; set to 0 for deterministic.
+RandomizedDelaySec=300
+
+Unit=secured-claude-anchor.service
+
+[Install]
+WantedBy=timers.target
