@@ -1,0 +1,79 @@
+# syntax=docker/dockerfile:1.7
+# Broker container — runs the secured-claude FastAPI gateway behind uvicorn.
+#
+# **Production posture**: per ADR-0006, the broker runs HOST-SIDE (clear
+# trust boundary between the LLM-controlled agent and the policy-decision
+# logic). This Dockerfile is for **CI full-stack smoke tests** + dev
+# convenience. v0.5 ADR-0033 documents the trade-off : containerising the
+# broker is acceptable when the agent and the broker run in DIFFERENT
+# containers on the same Docker network, since the trust-boundary
+# argument becomes "container-to-container over a closed bridge" rather
+# than "container-to-host".
+#
+# Pinned by digest per ADR-0008 ; Renovate's customManagers regex tracks
+# the uv base image pin.
+
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca
+
+WORKDIR /app
+
+# bookworm-slim base ; ca-certificates needed by uvicorn / requests.
+# wget is here for the healthcheck (`wget -q -O- /health`) ; ~250 KB total.
+RUN apt-get update -qq \
+ && apt-get install -y --no-install-recommends ca-certificates wget \
+ && rm -rf /var/lib/apt/lists/*
+
+# hatch-vcs (ADR-0018) reads the version from git tags, but we don't ship
+# the .git dir inside the container (image-bloat + copy-time tax). Pass
+# the version as a build-arg from CI ; pretend setuptools-scm computed it.
+# Defaults to "0.0.0+container" for local docker build without --build-arg.
+ARG SECURED_CLAUDE_VERSION=0.0.0+container
+# Both forms covered : the `_FOR_<NORMALIZED>` env is the preferred one,
+# but setuptools-scm falls back to the plain SETUPTOOLS_SCM_PRETEND_VERSION
+# if the FOR_ form doesn't match. Using both is belt-and-braces for the
+# variants in different hatch-vcs / setuptools-scm versions.
+ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SECURED_CLAUDE=${SECURED_CLAUDE_VERSION}
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SECURED_CLAUDE_VERSION}
+
+# Layer the deps install BEFORE the source copy so a hook.py / cli.py
+# edit doesn't invalidate the dep layer (saves ~30 s rebuild).
+COPY pyproject.toml uv.lock README.md /app/
+COPY src /app/src/
+
+# Sync prod deps only (`--no-dev`). hatch-vcs reads the pretend-version
+# env (set above) instead of querying git.
+RUN uv sync --frozen --no-dev
+
+# Policies + principals directory + Cerbos client config — read at runtime.
+COPY policies /app/policies/
+COPY config /app/config/
+COPY cerbos /app/cerbos/
+
+# Non-root runtime per ADR-0005 — same UID 1001 as the agent for parity.
+RUN groupadd -g 1001 broker \
+ && useradd -m -u 1001 -g 1001 -s /bin/bash broker \
+ && mkdir -p /home/broker/.local/share/secured-claude \
+ && chown -R broker:broker /home/broker /app/.venv
+
+USER broker
+
+# The audit DB writes to /home/broker/.local/share/secured-claude/approvals.db
+# (XDG-compliant ; broker.go through `_paths.db_path()`). The CI job mounts
+# a tmpfs for that path so smoke runs leave nothing behind.
+
+EXPOSE 8765
+
+# Add the venv's bin to PATH so `uvicorn` resolves directly, without
+# `uv run` (which re-syncs the venv at every invocation and writes to a
+# uv cache dir — both fail under read_only:true). The venv contents
+# were finalised by `uv sync` at build time ; runtime is a pure read.
+ENV PATH="/app/.venv/bin:${PATH}"
+
+# uvicorn factory mode — make_app() is called by uvicorn at startup ; lets
+# us mock dependencies in tests via the gateway.make_app(cerbos=, store=)
+# kwargs.
+ENTRYPOINT ["uvicorn", \
+            "secured_claude.gateway:make_app", \
+            "--factory", \
+            "--host", "0.0.0.0", \
+            "--port", "8765"]

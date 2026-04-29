@@ -335,3 +335,67 @@ def test_audit_verify_anchor_unreadable_file_exits_2(
     """Missing or malformed anchor file → exit 2."""
     rc = cli.main(["audit-verify-anchor", str(tmp_path / "nonexistent.json")])
     assert rc == 2
+
+
+# ────────────────────────────────────────────────────────────────────
+# ADR-0031 — `secured-claude principal validate` CLI
+# ────────────────────────────────────────────────────────────────────
+
+
+def test_principal_validate_reports_valid_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    p = tmp_path / "ok.yaml"
+    p.write_text(
+        "principals:\n  test:\n    roles: [agent]\n    attributes: {trust_level: 0}\n",
+        encoding="utf-8",
+    )
+    rc = cli.main(["principal", "validate", "--path", str(p)])
+    assert rc == 0
+    captured = capsys.readouterr()
+    # Rich may wrap lines on narrow test terminals ; collapse whitespace before asserting.
+    flat = " ".join(captured.out.split())
+    assert "1 principal(s) defined" in flat
+
+
+def test_principal_validate_catches_typo_in_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    p = tmp_path / "typo.yaml"
+    p.write_text(
+        "principals:\n  bad:\n    role: [agent]\n    atributes: {trust_level: 0}\n",
+        encoding="utf-8",
+    )
+    rc = cli.main(["principal", "validate", "--path", str(p)])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "did you mean roles" in captured.out
+    assert "did you mean attributes" in captured.out
+
+
+def test_principal_validate_catches_wrong_types(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    p = tmp_path / "types.yaml"
+    p.write_text(
+        'principals:\n  bad:\n    roles: "not a list"\n    attributes: 42\n',
+        encoding="utf-8",
+    )
+    rc = cli.main(["principal", "validate", "--path", str(p)])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert ".roles: must be a list of strings" in captured.out
+    assert ".attributes: must be a mapping" in captured.out
+
+
+def test_principal_validate_missing_file_returns_0(tmp_path: Path) -> None:
+    """Missing principals.yaml is OK — broker uses single-default fallback."""
+    rc = cli.main(["principal", "validate", "--path", str(tmp_path / "no.yaml")])
+    assert rc == 0
+
+
+def test_principal_validate_malformed_yaml_returns_2(tmp_path: Path) -> None:
+    p = tmp_path / "bad.yaml"
+    p.write_text("principals:\n  - invalid:: not\n  malformed: [\n", encoding="utf-8")
+    rc = cli.main(["principal", "validate", "--path", str(p)])
+    assert rc == 2

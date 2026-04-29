@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd template — daily audit-anchor on macOS (ADR-0029 + ADR-0032).
+
+  Setup :
+    1. Copy this file to ~/Library/LaunchAgents/com.secured-claude.audit-anchor.plist
+    2. Edit the placeholders (PROGRAM, ANCHOR_DIR) for your install
+    3. Load : launchctl load ~/Library/LaunchAgents/com.secured-claude.audit-anchor.plist
+    4. Verify : launchctl list | grep secured-claude
+
+  Output : daily anchor JSON written to ${ANCHOR_DIR}/anchor-YYYY-MM-DD.json.
+  Operator stores anchors externally (S3 with object-lock, GPG-signed git,
+  RFC 3161 TSA, …) ; the cron only emits — it does not externalise.
+
+  Schedule : daily at 04:30 local time. Adjust StartCalendarInterval below.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.secured-claude.audit-anchor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Replace ${PROGRAM} with the absolute path to secured-claude
+             (typically /usr/local/bin/secured-claude after pipx install). -->
+        <string>/usr/local/bin/secured-claude</string>
+        <string>audit-anchor</string>
+        <string>--output</string>
+        <!-- Replace ${ANCHOR_DIR} with a real, writable directory (e.g.
+             /Users/youruser/.local/share/secured-claude/anchors/).
+             The %d/%m/%Y substitutions are NOT interpreted by launchd ;
+             use a wrapper script if you want date-stamped filenames
+             (see bin/launchd/audit-anchor-wrapper.sh.example). -->
+        <string>/Users/youruser/.local/share/secured-claude/anchors/anchor-latest.json</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- StandardOutPath / StandardErrorPath go to ~/Library/Logs/ — easy to
+         tail with `tail -f ~/Library/Logs/secured-claude-anchor.log` -->
+    <key>StandardOutPath</key>
+    <string>/Users/youruser/Library/Logs/secured-claude-anchor.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/youruser/Library/Logs/secured-claude-anchor.log</string>
+
+    <!-- Don't keep alive ; if the run fails, launchd will retry at the
+         next schedule. -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Cap memory + CPU so the cron can never starve the rest of the
+         system. The anchor command takes < 100 ms on a typical audit DB. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>256</integer>
+    </dict>
+</dict>
+</plist>

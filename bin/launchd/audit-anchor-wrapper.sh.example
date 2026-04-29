@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Wrapper for the launchd audit-anchor cron — produces date-stamped
+# anchor files (launchd's StartCalendarInterval can't substitute date
+# placeholders, so we wrap the binary).
+#
+# Setup :
+#   1. Copy to /usr/local/bin/secured-claude-anchor-wrapper.sh
+#   2. chmod 0755
+#   3. Update the plist's ProgramArguments to point at this script.
+#
+# Output : ${ANCHOR_DIR}/anchor-YYYY-MM-DD.json
+# Retention : the script keeps the latest 30 days. Operator can sync
+#             anchors to S3 / GPG-sign / RFC 3161 / Rekor as a separate
+#             concern — this wrapper just emits.
+
+set -euo pipefail
+
+# Resolve config from env (falling back to sensible defaults).
+SECURED_CLAUDE="${SECURED_CLAUDE_BIN:-/usr/local/bin/secured-claude}"
+ANCHOR_DIR="${SECURED_CLAUDE_ANCHOR_DIR:-${HOME}/.local/share/secured-claude/anchors}"
+RETENTION_DAYS="${SECURED_CLAUDE_ANCHOR_RETENTION_DAYS:-30}"
+
+mkdir -p "${ANCHOR_DIR}"
+
+DATE=$(date +%Y-%m-%d)
+OUT="${ANCHOR_DIR}/anchor-${DATE}.json"
+
+# Emit the anchor. If the audit DB is empty, secured-claude exits 1
+# with a "nothing to anchor" message — fine, no file written.
+"${SECURED_CLAUDE}" audit-anchor --output "${OUT}" \
+    || { echo "secured-claude audit-anchor exited non-zero (empty DB ?)" >&2 ; exit 0 ; }
+
+echo "✓ anchor written : ${OUT}"
+
+# Prune anchors older than ${RETENTION_DAYS} days.
+find "${ANCHOR_DIR}" -name 'anchor-*.json' -type f -mtime "+${RETENTION_DAYS}" -delete \
+    2>/dev/null || true
+
+# (Optional) external sync hook : if SECURED_CLAUDE_ANCHOR_SYNC_CMD is set,
+# run it with the anchor path as argv[1]. Operator wires this to their
+# preferred external-store integration (aws s3 cp, gh api releases create,
+# git commit + push, ...).
+if [ -n "${SECURED_CLAUDE_ANCHOR_SYNC_CMD:-}" ]; then
+    echo "→ externalising via ${SECURED_CLAUDE_ANCHOR_SYNC_CMD}"
+    eval "${SECURED_CLAUDE_ANCHOR_SYNC_CMD} '${OUT}'"
+fi

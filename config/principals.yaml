@@ -16,28 +16,33 @@
 
 principals:
   # Default agent — what every Claude Code session uses unless overridden.
-  # trust_level: 0 means no `trusted_agent` derived role activates
+  # trust_level: 0 means the `trusted_agent` derived role won't activate
   # (gates the relaxed policies in filesystem.yaml / shell.yaml).
+  #
+  # NOTE: roles include BOTH `agent` (the principal's primary role) and
+  # `claude_agent` (a "derived" role that's actually expected to be
+  # explicitly listed in the principal — Cerbos's parentRoles semantics
+  # require the derived role to appear in the principal's roles list,
+  # not be auto-computed from the parent. derived_roles.yaml still gates
+  # `trusted_agent` and `auditor` via attribute conditions.
   claude-code-default:
-    roles: [agent]
+    roles: [agent, claude_agent]
     attributes:
       trust_level: 0
 
   # Trusted agent — elevated by an operator after manual review of the
   # audit log (e.g. "this session has 500 + approved actions, no denials").
-  # Activates `trusted_agent` derived role → wider Bash allowlist, broader
-  # WebFetch domains, etc. (per filesystem.yaml + network.yaml policies).
+  # Activates `trusted_agent` derived role (via trust_level >= 1 attr).
   claude-code-trusted:
-    roles: [agent]
+    roles: [agent, claude_agent]
     attributes:
       trust_level: 1
 
   # Audit-only agent — for read-only inspection of the audit DB.
-  # Activates `auditor` derived role → policies grant Read on audit DB
-  # paths but DENY all writes / Bash / WebFetch. Use case : a compliance
-  # reviewer running secured-claude in audit-inspection mode.
+  # Activates `auditor` derived role (via scope=audit-only attr) → policies
+  # grant Read on audit DB paths but DENY all writes / Bash / WebFetch.
   audit-only:
-    roles: [agent]
+    roles: [agent, claude_agent]
     attributes:
       scope: "audit-only"
       trust_level: 0

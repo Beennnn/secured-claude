@@ -42,6 +42,10 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0028](0028-multi-arch-images-manifest-list.md) | True multi-arch images (linux/amd64 + linux/arm64) | Per-arch Kaniko builds + crane index append → manifest-list ; native binaries on Apple Silicon / Graviton, no QEMU |
 | [0029](0029-external-hash-anchor.md) | External hash anchor for audit log | `audit-anchor` emits a JSON commit to latest row_hash ; `audit-verify-anchor` detects post-anchor file tampering |
 | [0030](0030-real-llm-smoke-manual-trigger.md) | Real-LLM smoke as manual-trigger CI job | `smoke:llm-real` runs `claude -p` against the just-built image ; operator clicks to trigger after setting the protected API key variable |
+| [0031](0031-principal-validate-cli.md) | `secured-claude principal validate` lint CLI | Catches YAML typos (role / atributes / wrong types) before runtime ; exit 1 on issues for pre-commit / CI gating |
+| [0032](0032-auto-anchor-cron-templates.md) | Auto-anchor cron templates (launchd / systemd) | Daily `audit-anchor` cron + retention prune + optional external-sync hook ; ship hardened service unit |
+| [0033](0033-broker-containerised-for-ci-smoke.md) | Broker containerised for CI full-stack smoke | Dockerfile.broker + docker-compose.ci.yml override ; production stays host-side per ADR-0006 |
+| [0034](0034-principal-provider-abstraction.md) | PrincipalProvider abstraction (foundation for OIDC) | YAMLPrincipalProvider + HTTPPrincipalProvider + make_provider() factory ; SECURED_CLAUDE_IDP_URL env switches to URL fetch |
 
 ### Operational envelope (where the code lives, how it's shipped)
 
