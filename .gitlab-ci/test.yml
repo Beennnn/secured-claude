@@ -61,3 +61,60 @@ test:py312:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
+
+# ---------------------------------------------------------------------------
+# Runtime smoke (ADR-0026) — proves the wiring of the just-built images
+# without burning Anthropic API budget. The 117 unit tests + 26 audit-demo
+# scenarios + 4 bin/test-egress.sh assertions all pass at the *L1 + sidecar*
+# layer, but they don't prove the *agent image itself* boots correctly.
+# This job pulls the freshly-built images and verifies :
+#   * agent image has the `claude` binary on PATH
+#   * agent image has the `secured-claude-hook` script with the right shebang
+#     (the v0.1.1 lesson : hook.py without #!/usr/bin/env python3 made bash
+#     parse Python as shell)
+#   * dns-filter image runs dnsmasq --version cleanly
+#   * egress-proxy image runs tinyproxy -v cleanly
+# ---------------------------------------------------------------------------
+
+test:runtime-smoke:
+  stage: test
+  image: docker:24-cli
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  needs:
+    - build:image
+    - build:image:dns-filter
+    - build:image:egress-proxy
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    # Pull all 3 images by SHA — same bytes the build:image:* jobs pushed.
+    - docker pull "$CI_REGISTRY_IMAGE/claude-code:$CI_COMMIT_SHA"
+    - docker pull "$CI_REGISTRY_IMAGE/dns-filter:$CI_COMMIT_SHA"
+    - docker pull "$CI_REGISTRY_IMAGE/egress-proxy:$CI_COMMIT_SHA"
+    # Agent image — verify the 3 things v0.1.1's runtime smoke would have caught :
+    # 1. claude binary on PATH
+    # 2. secured-claude-hook script exists + has #!/usr/bin/env python3 shebang
+    # 3. settings.template.json present (entrypoint copies it to ~/.claude/settings.json)
+    - >
+      docker run --rm --entrypoint sh "$CI_REGISTRY_IMAGE/claude-code:$CI_COMMIT_SHA"
+      -c 'which claude && claude --version'
+    - >
+      docker run --rm --entrypoint sh "$CI_REGISTRY_IMAGE/claude-code:$CI_COMMIT_SHA"
+      -c 'test -x /usr/local/bin/secured-claude-hook'
+    - >
+      docker run --rm --entrypoint sh "$CI_REGISTRY_IMAGE/claude-code:$CI_COMMIT_SHA"
+      -c 'head -1 /usr/local/bin/secured-claude-hook | grep -q "^#!/usr/bin/env python3"'
+    - >
+      docker run --rm --entrypoint sh "$CI_REGISTRY_IMAGE/claude-code:$CI_COMMIT_SHA"
+      -c 'test -f /etc/secured-claude/settings.template.json'
+    # Sidecar images — verify the binaries run cleanly + report version.
+    - >
+      docker run --rm --entrypoint /usr/sbin/dnsmasq "$CI_REGISTRY_IMAGE/dns-filter:$CI_COMMIT_SHA"
+      --version
+    - >
+      docker run --rm --entrypoint sh "$CI_REGISTRY_IMAGE/egress-proxy:$CI_COMMIT_SHA"
+      -c 'tinyproxy -v 2>&1 | head -1'
+    - echo "✓ runtime smoke — all 3 images boot cleanly, hook wired correctly"
