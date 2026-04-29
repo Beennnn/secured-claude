@@ -37,6 +37,8 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0022](0022-intent-layer-vs-confinement-layers.md) | 1 intent layer (L1) + 3 confinement layers (L2/L3/L4) | Honest framing — L1 sees intent ; L2/L3/L4 bound blast radius if L1 is bypassed but cannot replace it |
 | [0024](0024-hash-chain-audit-log.md) | Hash-chain audit log (tamper-evident) | SHA-256 chain over each row ; `secured-claude audit-verify` exits 1 if a row was modified or removed |
 | [0025](0025-pre-built-sidecar-images.md) | Pre-built sidecar images for dns-filter + egress-proxy | Re-enables read_only on the sidecars (L4 parity with the agent) ; closes v0.2 apk-install-at-boot trade-off |
+| [0026](0026-runtime-smoke-ci-gate.md) | Runtime smoke as a CI gate (no API key burn) | Pulls the just-built images and verifies the wiring on every tag/main pipeline ; catches v0.1.1's hook-shebang class without burning Anthropic API budget |
+| [0027](0027-multi-principal-directory.md) | Multi-principal directory (config/principals.yaml) | Activates the v0.1 derived_roles (trusted_agent, auditor) ; broker maps principal_id → roles+attrs at request time |
 
 ### Operational envelope (where the code lives, how it's shipped)
 

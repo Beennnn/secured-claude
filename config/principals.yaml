@@ -1,0 +1,43 @@
+# Principal directory for the secured-claude broker — ADR-0027.
+#
+# Maps principal_id (passed by the hook via SECURED_CLAUDE_PRINCIPAL env)
+# to Cerbos principal roles + attributes. Cerbos's `derived_roles` (see
+# policies/derived_roles.yaml) consume the attributes to elevate or
+# constrain the principal's effective role at policy-eval time.
+#
+# Editing this file is a security-relevant change : it defines who
+# (which session ID) gets which trust level. Reviewable in PR ; the
+# CI lint:cerbos-compile job ensures the derived_roles still resolve.
+#
+# The default principal `claude-code-default` matches the v0.1+v0.2
+# hardcoded behaviour : minimal trust, base agent role. Existing
+# deployments that don't set SECURED_CLAUDE_PRINCIPAL keep working
+# without change.
+
+principals:
+  # Default agent — what every Claude Code session uses unless overridden.
+  # trust_level: 0 means no `trusted_agent` derived role activates
+  # (gates the relaxed policies in filesystem.yaml / shell.yaml).
+  claude-code-default:
+    roles: [agent]
+    attributes:
+      trust_level: 0
+
+  # Trusted agent — elevated by an operator after manual review of the
+  # audit log (e.g. "this session has 500 + approved actions, no denials").
+  # Activates `trusted_agent` derived role → wider Bash allowlist, broader
+  # WebFetch domains, etc. (per filesystem.yaml + network.yaml policies).
+  claude-code-trusted:
+    roles: [agent]
+    attributes:
+      trust_level: 1
+
+  # Audit-only agent — for read-only inspection of the audit DB.
+  # Activates `auditor` derived role → policies grant Read on audit DB
+  # paths but DENY all writes / Bash / WebFetch. Use case : a compliance
+  # reviewer running secured-claude in audit-inspection mode.
+  audit-only:
+    roles: [agent]
+    attributes:
+      scope: "audit-only"
+      trust_level: 0

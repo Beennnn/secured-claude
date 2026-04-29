@@ -1,18 +1,24 @@
-"""Tests for the FastAPI gateway (ADR-0001, ADR-0004)."""
+"""Tests for the FastAPI gateway (ADR-0001, ADR-0004, ADR-0027)."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
 from secured_claude.cerbos_client import CheckResult
-from secured_claude.gateway import make_app, map_tool_to_resource
+from secured_claude.gateway import load_principals, make_app, map_tool_to_resource
 from secured_claude.store import Store
 
 
-def _make_app(tmp_path: Path, *, allow: bool) -> tuple[TestClient, Store]:
+def _make_app(
+    tmp_path: Path,
+    *,
+    allow: bool,
+    principals: dict[str, dict[str, Any]] | None = None,
+) -> tuple[TestClient, Store, MagicMock]:
     cerbos = MagicMock()
     cerbos.check.return_value = CheckResult(
         allow=allow,
@@ -21,12 +27,12 @@ def _make_app(tmp_path: Path, *, allow: bool) -> tuple[TestClient, Store]:
         raw={},
     )
     store = Store(path=tmp_path / "test.db")
-    app = make_app(cerbos=cerbos, store=store)
-    return TestClient(app), store
+    app = make_app(cerbos=cerbos, store=store, principals=principals)
+    return TestClient(app), store, cerbos
 
 
 def test_check_allow_logs_to_store(tmp_path: Path) -> None:
-    client, store = _make_app(tmp_path, allow=True)
+    client, store, _cerbos = _make_app(tmp_path, allow=True)
     resp = client.post(
         "/check",
         json={
@@ -48,7 +54,7 @@ def test_check_allow_logs_to_store(tmp_path: Path) -> None:
 
 
 def test_check_deny_logs_to_store(tmp_path: Path) -> None:
-    client, store = _make_app(tmp_path, allow=False)
+    client, store, _cerbos = _make_app(tmp_path, allow=False)
     resp = client.post(
         "/check",
         json={"tool": "Read", "tool_input": {"file_path": "/etc/passwd"}},
@@ -61,7 +67,7 @@ def test_check_deny_logs_to_store(tmp_path: Path) -> None:
 
 
 def test_health_endpoint(tmp_path: Path) -> None:
-    client, _ = _make_app(tmp_path, allow=True)
+    client, _store, _cerbos = _make_app(tmp_path, allow=True)
     resp = client.get("/health")
     assert resp.status_code == 200
     body = resp.json()
@@ -107,3 +113,183 @@ def test_map_unknown_tool_falls_back() -> None:
     kind, _rid, action, _attr = map_tool_to_resource("FrobnicateXYZ", {"a": 1})
     assert kind == "unknown_tool"
     assert action == "invoke"
+
+
+# ────────────────────────────────────────────────────────────────────
+# ADR-0027 — multi-principal directory
+# ────────────────────────────────────────────────────────────────────
+
+
+def test_default_principal_uses_minimal_attrs(tmp_path: Path) -> None:
+    """The default principal_id maps to roles=[agent], trust_level=0."""
+    client, _store, cerbos = _make_app(tmp_path, allow=True)
+    client.post(
+        "/check",
+        json={
+            "tool": "Read",
+            "tool_input": {"file_path": "/workspace/foo.py"},
+            "principal_id": "claude-code-default",
+            "session_id": "s1",
+        },
+    )
+    call = cerbos.check.call_args
+    assert call.kwargs["principal_roles"] == ["agent"]
+    assert call.kwargs["principal_attr"] == {"trust_level": 0}
+
+
+def test_trusted_principal_passes_higher_trust_level(tmp_path: Path) -> None:
+    """A principal with trust_level=1 in the directory passes through to Cerbos
+    so the `trusted_agent` derived role can activate (per derived_roles.yaml)."""
+    principals = {
+        "claude-code-default": {"roles": ["agent"], "attributes": {"trust_level": 0}},
+        "claude-code-trusted": {"roles": ["agent"], "attributes": {"trust_level": 1}},
+    }
+    client, _store, cerbos = _make_app(tmp_path, allow=True, principals=principals)
+    client.post(
+        "/check",
+        json={
+            "tool": "Bash",
+            "tool_input": {"command": "ls"},
+            "principal_id": "claude-code-trusted",
+            "session_id": "s1",
+        },
+    )
+    call = cerbos.check.call_args
+    assert call.kwargs["principal_id"] == "claude-code-trusted"
+    assert call.kwargs["principal_attr"]["trust_level"] == 1
+
+
+def test_audit_only_principal_passes_scope(tmp_path: Path) -> None:
+    """An auditor principal carries scope='audit-only' so the `auditor`
+    derived role can activate."""
+    principals = {
+        "audit-only": {
+            "roles": ["agent"],
+            "attributes": {"scope": "audit-only", "trust_level": 0},
+        },
+    }
+    client, _store, cerbos = _make_app(tmp_path, allow=True, principals=principals)
+    client.post(
+        "/check",
+        json={
+            "tool": "Read",
+            "tool_input": {"file_path": "/workspace/audit.db"},
+            "principal_id": "audit-only",
+            "session_id": "s1",
+        },
+    )
+    call = cerbos.check.call_args
+    assert call.kwargs["principal_attr"]["scope"] == "audit-only"
+
+
+def test_unknown_principal_falls_back_to_default_attrs(tmp_path: Path) -> None:
+    """A principal_id not in the directory still gets a check (fail-open is
+    safe : the resulting roles=[agent] + trust_level=0 are minimal, and the
+    Cerbos policies still gate every action)."""
+    principals = {
+        "claude-code-default": {"roles": ["agent"], "attributes": {"trust_level": 0}},
+    }
+    client, _store, cerbos = _make_app(tmp_path, allow=True, principals=principals)
+    client.post(
+        "/check",
+        json={
+            "tool": "Read",
+            "tool_input": {"file_path": "/workspace/foo.py"},
+            "principal_id": "some-unknown-principal",
+            "session_id": "s1",
+        },
+    )
+    call = cerbos.check.call_args
+    # Roles + attrs come from the default fallback ; principal_id is preserved
+    # in the audit log so the unknown principal is still traceable.
+    assert call.kwargs["principal_id"] == "some-unknown-principal"
+    assert call.kwargs["principal_roles"] == ["agent"]
+    assert call.kwargs["principal_attr"] == {"trust_level": 0}
+
+
+def test_load_principals_from_yaml(tmp_path: Path) -> None:
+    """Loader reads roles + attributes correctly from a YAML directory."""
+    p = tmp_path / "principals.yaml"
+    p.write_text(
+        """
+principals:
+  claude-code-default:
+    roles: [agent]
+    attributes:
+      trust_level: 0
+  claude-code-trusted:
+    roles: [agent]
+    attributes:
+      trust_level: 1
+""",
+        encoding="utf-8",
+    )
+    out = load_principals(p)
+    assert out["claude-code-default"]["attributes"]["trust_level"] == 0
+    assert out["claude-code-trusted"]["attributes"]["trust_level"] == 1
+
+
+def test_load_principals_missing_file_returns_default(tmp_path: Path) -> None:
+    """Missing principals.yaml → single-default fallback (matches v0.2 behaviour)."""
+    out = load_principals(tmp_path / "nonexistent.yaml")
+    assert "claude-code-default" in out
+    assert out["claude-code-default"]["attributes"] == {"trust_level": 0}
+
+
+def test_load_principals_malformed_yaml_returns_default(tmp_path: Path) -> None:
+    """Malformed YAML → fallback (we never fail-closed on the principals file)."""
+    p = tmp_path / "bad.yaml"
+    p.write_text("principals:\n  - invalid:: not a dict\n  malformed: [\n", encoding="utf-8")
+    out = load_principals(p)
+    assert "claude-code-default" in out
+
+
+def test_load_principals_missing_top_key_returns_default(tmp_path: Path) -> None:
+    """YAML without `principals:` top key → fallback."""
+    p = tmp_path / "no-key.yaml"
+    p.write_text("other_section:\n  foo: bar\n", encoding="utf-8")
+    out = load_principals(p)
+    assert out == {"claude-code-default": {"roles": ["agent"], "attributes": {"trust_level": 0}}}
+
+
+def test_load_principals_skips_invalid_entries(tmp_path: Path) -> None:
+    """Entries that aren't dicts, or where roles/attributes have wrong types,
+    are dropped silently. Default is still injected at the end."""
+    p = tmp_path / "mixed.yaml"
+    p.write_text(
+        """
+principals:
+  good-principal:
+    roles: [agent]
+    attributes:
+      trust_level: 1
+  bad-roles:
+    roles: "not a list"
+    attributes: {}
+  bad-attributes:
+    roles: [agent]
+    attributes: "not a dict"
+  not-a-dict: 42
+""",
+        encoding="utf-8",
+    )
+    out = load_principals(p)
+    assert "good-principal" in out
+    assert "bad-roles" not in out
+    assert "bad-attributes" not in out
+    assert "not-a-dict" not in out
+    # Default always injected
+    assert "claude-code-default" in out
+
+
+def test_load_principals_env_override(tmp_path: Path, monkeypatch) -> None:
+    """SECURED_CLAUDE_PRINCIPALS env points the loader at a non-default path."""
+    p = tmp_path / "env.yaml"
+    p.write_text(
+        "principals:\n  custom-from-env:\n    roles: [agent]\n    attributes: {trust_level: 2}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SECURED_CLAUDE_PRINCIPALS", str(p))
+    out = load_principals()  # no path arg → reads env
+    assert "custom-from-env" in out
+    assert out["custom-from-env"]["attributes"]["trust_level"] == 2

@@ -88,9 +88,9 @@ The remaining gaps below are documented ahead of being live.
 | Item | v0.2 reality | When it goes live |
 |---|---|---|
 | **Audit log tamper-evidence at FS layer** | **v0.3 closes this** ([ADR-0024](docs/adr/0024-hash-chain-audit-log.md)) — SHA-256 chain over each row (`prev_hash`, `row_hash` columns) ; `secured-claude audit-verify` walks the chain and exits non-zero on the first detected break. `rm approvals.db` followed by re-creation is still possible but produces a chain that starts at id=1 with genesis prev_hash next to a recent ts — a forensic smoking gun. External hash anchor (QLDB / blockchain) tracked v0.4+. | Done in v0.3 — `secured-claude audit-verify` |
-| **Multi-principal Cerbos roles** | `derived_roles.yaml` defines them ; broker hardcodes single principal `claude-code-default` | v0.3 |
-| **Runtime smoke in CI** (real claude binary call) | Recipe exists (`secured-claude up && claude -p ...`), runs locally pre-tag ; not yet a CI job | v0.3 — uses a test API key in a GitLab CI variable |
-| **read_only on egress-proxy / dns-filter sidecars** | **v0.3 closes this** ([ADR-0025](docs/adr/0025-pre-built-sidecar-images.md)) — dedicated `Dockerfile.dns-filter` + `Dockerfile.egress-proxy`, packages baked in, no apk-install-at-boot. `read_only: true` is back ; verified by `docker inspect ... ReadonlyRootfs=true`. Cosign signing of the sidecar images deferred to v0.3.1. | Done in v0.3 (image-level) ; v0.3.1 (cosign-signed) |
+| **Multi-principal Cerbos roles** | **v0.3.1 closes this** ([ADR-0027](docs/adr/0027-multi-principal-directory.md)) — `config/principals.yaml` directory maps `principal_id` to `roles + attributes` ; broker resolves at request time so the v0.1 `derived_roles.yaml` (trusted_agent, auditor) finally activate end-to-end. Default `claude-code-default` preserves v0.2 behaviour (additive change, no break). | Done in v0.3.1 |
+| **Runtime smoke in CI** (image wiring) | **v0.3.1 closes the wiring smoke** ([ADR-0026](docs/adr/0026-runtime-smoke-ci-gate.md)) — `test:runtime-smoke` pulls the 3 just-built images on every tag/main pipeline and verifies `which claude` + `secured-claude-hook` shebang + sidecar binary versions. No Anthropic API call, no budget burn. **Real-LLM smoke** (with API key) is a separate manual-trigger job, tracked for v0.4. | Wiring smoke done in v0.3.1 ; real-LLM smoke v0.4 |
+| **read_only on egress-proxy / dns-filter sidecars** | **v0.3 closes this** ([ADR-0025](docs/adr/0025-pre-built-sidecar-images.md)) — dedicated `Dockerfile.dns-filter` + `Dockerfile.egress-proxy`, packages baked in, no apk-install-at-boot. `read_only: true` is back, sidecars run as `nobody` / `tinyproxy` with minimal caps. **v0.3.1 closes the cosign signing** — both sidecar images now signed via the keyless OIDC pipeline ([ADR-0016](docs/adr/0016-supply-chain-cosign-sbom.md)) alongside the agent. | Done in v0.3 (image-level + non-root) + v0.3.1 (cosign-signed) |
 | **Multi-arch image (linux/arm64 native)** | Kaniko `--customPlatform=linux/amd64` produces an amd64-deterministic image regardless of the runner's native arch (arm64 macbook-local in v0.2). amd64 users get a native binary ; arm64 users (Apple Silicon, AWS Graviton) fall back to QEMU emulation under Docker Desktop / containerd `binfmt_misc`. v0.1.8 shipped arm64-only by mistake — this is the v0.2 fix. | v0.3 — true multi-arch manifest list (two parallel Kaniko jobs + `crane index append`) |
 | **Hook coverage of every Claude Code tool** | `matcher: "*"` in PreToolUse hooks every tool we know about (Read/Write/Edit/Bash/WebFetch/WebSearch/MCP/Task). Anthropic adds tools faster than we audit ; **a new tool shipping in a future Claude Code release would default to ALLOW until we map it**. Mitigated by the broker's `unknown_tool` catch-all (kind=`unknown_tool` action=`invoke`) which has no policy rule → DENY by Cerbos default ; verified by `tests/test_gateway.py::test_map_unknown_tool_falls_back`. | Continuous — Renovate bumps Claude Code, audit-demo adds scenarios per new tool |
 
@@ -175,11 +175,15 @@ jq 'length' gitleaks-$TAG.json   # 0 = no leaks
 curl -fsSL "$BASE/-/jobs/artifacts/$TAG/raw/coverage.xml?job=test:py313" \
   -o coverage-$TAG.xml
 
-# 6. Image signature — verify cosign keyless OIDC (ADR-0016)
-cosign verify \
-  registry.gitlab.com/benoit.besson/secured-claude/claude-code:$TAG \
-  --certificate-identity-regexp '^https://gitlab.com/benoit.besson/secured-claude' \
-  --certificate-oidc-issuer https://gitlab.com
+# 6. Image signatures — verify cosign keyless OIDC (ADR-0016) on all 3 images.
+#    Agent + both sidecars are signed since v0.3.1 (ADR-0025 + cosign extension).
+for img in claude-code dns-filter egress-proxy; do
+  cosign verify \
+    registry.gitlab.com/benoit.besson/secured-claude/$img:$TAG \
+    --certificate-identity-regexp '^https://gitlab.com/benoit.besson/secured-claude' \
+    --certificate-oidc-issuer https://gitlab.com \
+  || echo "FAIL on $img"
+done
 ```
 
 **No clone required.** The links resolve to immutable CI artifacts with 1-year retention. Recipients get the same bytes you'd see at release time. Tag annotations (`git show $TAG`) carry the full verification log including pipeline IDs and local test pass — `gh release view` / `glab release view` surface the same.
