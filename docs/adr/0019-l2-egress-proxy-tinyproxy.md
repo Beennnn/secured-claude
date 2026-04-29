@@ -5,7 +5,7 @@ Status: Accepted
 
 ## Context
 
-[ADR-0010](0010-network-egress-filter-allowlist.md) established the architectural intent for L2 (network egress allowlist). [ADR-0012](0012-defense-in-depth-layers.md) lists L2 as one of four independent enforcement layers.
+[ADR-0010](0010-network-egress-filter-allowlist.md) established the architectural intent for L2 (network egress allowlist). [ADR-0022](0022-intent-layer-vs-confinement-layers.md) (which supersedes [ADR-0012](0012-defense-in-depth-layers.md)) classifies L2 as one of three confinement layers — its job is to bound the blast radius if L1 (the intent layer) is bypassed.
 
 In v0.1, L2 was **design-only**. The agent container ran on a custom Docker bridge (`secured-claude-net`), which gave it isolation from other Docker workloads but did not constrain its egress at all. A compromised Claude Code binary could connect to any reachable host on the internet, even if Cerbos (L1) refused the matching tool intent.
 
@@ -95,7 +95,7 @@ Any addition to this file is a new exfiltration channel for a compromised agent 
 ## References
 
 - [ADR-0010](0010-network-egress-filter-allowlist.md) — original L2 design intent (now realised by this ADR)
-- [ADR-0012](0012-defense-in-depth-layers.md) — defense-in-depth contract
+- [ADR-0022](0022-intent-layer-vs-confinement-layers.md) — defense-in-depth contract (supersedes [ADR-0012](0012-defense-in-depth-layers.md))
 - [ADR-0020](0020-l3-dns-allowlist-dnsmasq.md) — companion DNS allowlist (closes the residual DNS-leak gap)
 - tinyproxy upstream : https://tinyproxy.github.io/
 - alpine 3.20 tinyproxy package : https://pkgs.alpinelinux.org/package/v3.20/main/x86_64/tinyproxy

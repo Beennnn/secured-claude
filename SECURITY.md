@@ -1,6 +1,6 @@
 # Security policy
 
-> **Mission** — make the comfort of Claude Code safe to deploy in an enterprise context, by gating every tool call through a Cerbos policy decision point and persisting every decision in an append-only audit log, with **defense-in-depth across 4 independent layers**.
+> **Mission** — make the comfort of Claude Code safe to deploy in an enterprise context, by gating every tool call through a Cerbos policy decision point and persisting every decision in an append-only audit log. Defense-in-depth via **1 intent layer + 3 confinement layers** ([ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md)) bounds the blast radius if the intent layer is bypassed.
 
 ---
 
@@ -15,24 +15,24 @@ We follow [RFC 9116](https://www.rfc-editor.org/rfc/rfc9116) coordinated vulnera
 
 For the well-known machine-readable contact file see [`.well-known/security.txt`](.well-known/security.txt).
 
-## Defense-in-depth — four layers, but not all enforced in v0.1
+## Defense-in-depth — 1 intent layer + 3 confinement layers (v0.2)
 
-**Target architecture** : every tool invocation by the agent traverses **four orthogonal controls**, designed so each is independently sufficient to block its threat class. Compromising one layer does not compromise the system.
+**Architecture** : per [ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md), L1 is the *semantic* gate that understands the agent's intent ("Claude wants to Read /etc/passwd → policy says deny"). L2/L3/L4 are *confinement* layers : they don't see intent, but they bound the blast radius if L1 is bypassed (CVE in Claude binary, prompt injection that fools Cerbos, runtime code patch). They do not *replace* L1's semantic decisions.
 
-| Layer | Mechanism | Threats mitigated | v0.2 status |
+| Role | Mechanism | Threats mitigated | v0.2 status |
 |---|---|---|---|
-| **L1 — Application** | PreToolUse hook → Cerbos PDP `CheckResources` → `permissionDecision` | Tool intent abuse (Read sensitive paths, dangerous Bash, MCP exploitation, etc.) | **Enforced + tested** (`bin/security-audit.sh` 26/26) |
-| **L2 — Network egress** | tinyproxy sidecar with `FilterDefaultDeny` ; CONNECT to non-allowlisted host returns 403 ([ADR-0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md)) | Data exfiltration via syscall-level network calls inside an approved Bash command | **Enforced + tested** — `curl -x http://172.30.42.4:3128 https://evil.com` returns `CONNECT tunnel failed, response 403` |
-| **L2 — DNS allowlist** | dnsmasq sidecar with `no-resolv` ; agent's resolver returns SERVFAIL/REFUSED for non-allowlisted hostnames ([ADR-0020](docs/adr/0020-l3-dns-allowlist-dnsmasq.md)) | DNS tunneling / DNS exfiltration via TXT or A queries to attacker-controlled DNS | **Enforced + tested** — `nslookup evil.com 172.30.42.3` returns REFUSED |
-| **L3 — Filesystem** | Container `/workspace` mount only, host FS invisible | Lateral access to credentials (`~/.ssh`, `~/.aws`, `.env`), arbitrary host writes | **Enforced** ; no explicit test (relies on Docker's mount semantics) |
-| **L4 — Container hardening** | Non-root UID, read-only root FS (agent), `cap-drop=ALL`, default seccomp profile, cgroup limits | Kernel-side escalation, privilege abuse | **Enforced** for the agent ; sidecars are not `read_only` (apk-install pattern) — trade-off documented in [ADR-0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md) |
+| **L1 — Intent (Cerbos PDP via PreToolUse hook)** | Reads the abstract operation (`Read("/etc/passwd")`), evaluates against versioned Cerbos policies, returns `permissionDecision`. Audit-logged with reason. | Tool intent abuse — Read sensitive paths, dangerous Bash, MCP exploitation, WebFetch to non-allowlisted URLs | **Enforced + tested** (`bin/security-audit.sh` 26/26) |
+| **L2 — Network-egress confinement (tinyproxy)** | CONNECT-only forward proxy with `FilterDefaultDeny` ([ADR-0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md)). Non-allowlisted host → 403. | Bounds blast radius if L1 misses : even a compromised binary can only reach `*.anthropic.com`. | **Enforced + tested** — `curl -x http://172.30.42.4:3128 https://evil.com` returns `CONNECT tunnel failed, response 403` |
+| **L3 — DNS confinement (dnsmasq)** | dnsmasq with `no-resolv` ([ADR-0020](docs/adr/0020-l3-dns-allowlist-dnsmasq.md)). Non-allowlisted hostnames → SERVFAIL/REFUSED. | Bounds info-disclosure via DNS tunneling / exfil to attacker-controlled DNS — agent can't even *resolve* evil.com. | **Enforced + tested** — `nslookup evil.com 172.30.42.3` returns REFUSED |
+| **L3 — Filesystem confinement** | Container `/workspace` mount only ; host FS invisible. | Bounds lateral access to host secrets (`~/.ssh`, `~/.aws`, `.env`) — they're not in the agent's namespace, so even an approved Bash can't read them. | **Enforced** ; no explicit test (relies on Docker's mount semantics) |
+| **L4 — Container hardening** | Non-root UID, read-only rootfs (agent), `cap-drop=ALL`, default seccomp, no-new-privileges, cgroup `mem_limit: 4g`. | Bounds kernel-side escalation routes — even a privesc CVE chain has a smaller surface. | **Enforced** for the agent ; sidecars deferred to v0.3 (apk-install pattern) — trade-off documented in [ADR-0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md) |
 
-So v0.2 holds **L1 + L2 (HTTP egress) + L2-DNS + partial L3/L4**.
-The "4 independent layers, each independently sufficient" framing in
-[ADR-0012](docs/adr/0012-defense-in-depth-layers.md) is now realised
-end-to-end for agent egress (L1 Cerbos + L2 tinyproxy + L2-DNS dnsmasq
-form a triple allowlist). The remaining v0.3 gaps are documented in
-the README's `What is configured but NOT yet enforced` table.
+**Honest contract** : the security value is heavily concentrated in L1.
+L2/L3/L4 don't replace L1 ; they make a successful L1 bypass less
+catastrophic. Hardening L1 (signed policy bundles, audit log integrity,
+fail-closed semantics, multi-principal — see v0.3+ backlog) gets the
+priority it deserves under this framing. The remaining v0.3 gaps are
+documented in the README's `What is configured but NOT yet enforced` table.
 
 Full mapping of each threat to defending layers : [`docs/security/threat-model.md`](docs/security/threat-model.md).
 

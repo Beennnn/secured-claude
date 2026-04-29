@@ -101,23 +101,31 @@ The remaining gaps below are documented ahead of being live.
 - Physical adversary at the developer machine
 - Compromise of `cerbos/cerbos` upstream image — mitigated by digest pinning ; residual risk acknowledged
 
-### Honest scoring of "defense-in-depth" in v0.2
+### Honest scoring : 1 intent layer + 3 confinement layers (v0.2)
 
-| Layer | Designed | Enforced in v0.2 | Tested in v0.2 |
-|---|---|---|---|
-| **L1 — PreToolUse hook + Cerbos PDP** | Yes | Yes | `bin/security-audit.sh` → 26/26 PASS + runtime smoke transcript |
-| **L2 — Network egress allowlist** | Yes ([ADR-0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md)) | **Yes** — tinyproxy `FilterDefaultDeny` ; CONNECT to non-allowlisted host returns 403 | End-to-end : `curl -x http://172.30.42.4:3128 https://evil.com` → `CONNECT tunnel failed, response 403` (proof in ADR-0019) |
-| **L3 — DNS allowlist** | Yes ([ADR-0020](docs/adr/0020-l3-dns-allowlist-dnsmasq.md)) | **Yes** — dnsmasq `no-resolv` ; `nslookup evil.com` → REFUSED | End-to-end : `nslookup evil.com 172.30.42.3` → `REFUSED` (proof in ADR-0020) |
-| **L3 — Filesystem confinement** | Yes | Yes — only `/workspace` mounted RW from host | Inferred ; no explicit test that `/Users/<me>/.ssh` is unreachable |
-| **L4 — Container hardening** | Yes | Yes for the agent : non-root + cap_drop ALL + seccomp default + read-only rootfs + cgroup `mem_limit: 4g` ; partial for sidecars (read_only deferred — see "configured but NOT yet enforced" above) | Inferred ; no explicit test (`docker inspect` would prove flags are set) |
+Per [ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md) — only L1 understands the agent's intent. L2/L3/L4 are confinement layers that bound the blast radius if L1 is bypassed but don't replace L1's semantic decisions.
 
-Reading : v0.2 holds **L1 + L2 + L3-DNS + partial L3-FS / L4**. The
-"4 independent layers, each independently sufficient" framing in
-[ADR-0012](docs/adr/0012-defense-in-depth-layers.md) is now **enforced
-end-to-end** for the agent's network egress (L1 + L2 + L3-DNS triple
-allowlist). The remaining v0.3 gaps (FS-tamper-evident audit log,
-multi-principal, runtime-smoke-in-CI, read_only on sidecars) are
-documented above.
+| Role | Layer | Designed | Enforced in v0.2 | Tested in v0.2 |
+|---|---|---|---|---|
+| **Intent** | **L1 — PreToolUse hook + Cerbos PDP** ([0001](docs/adr/0001-cerbos-as-policy-decision-point.md), [0002](docs/adr/0002-pretooluse-hook-as-interception-point.md)) | Yes | Yes | `bin/security-audit.sh` → 26/26 PASS + runtime smoke transcript |
+| **Confinement** | **L2 — Network egress allowlist** ([ADR-0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md)) | Yes | **Yes** — tinyproxy `FilterDefaultDeny` ; CONNECT to non-allowlisted host returns 403 | End-to-end : `curl -x http://172.30.42.4:3128 https://evil.com` → `CONNECT tunnel failed, response 403` (proof in ADR-0019) |
+| **Confinement** | **L3 — DNS allowlist** ([ADR-0020](docs/adr/0020-l3-dns-allowlist-dnsmasq.md)) | Yes | **Yes** — dnsmasq `no-resolv` ; `nslookup evil.com` → REFUSED | End-to-end : `nslookup evil.com 172.30.42.3` → `REFUSED` (proof in ADR-0020) |
+| **Confinement** | **L3 — Filesystem confinement** | Yes | Yes — only `/workspace` mounted RW from host | Inferred ; no explicit test that `/Users/<me>/.ssh` is unreachable |
+| **Confinement** | **L4 — Container hardening** | Yes | Yes for the agent : non-root + cap_drop ALL + seccomp default + read-only rootfs + cgroup `mem_limit: 4g` ; sidecars partial (read_only deferred — see "configured but NOT yet enforced" above) | Inferred ; no explicit test (`docker inspect` would prove flags are set) |
+
+Reading : v0.2 holds **L1 (intent) + L2 (egress confinement) + L3 (DNS + FS confinement) + partial L4 (container hardening)**. Per
+[ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md), only L1
+sees the agent's intent — it decides "this Read of `/etc/passwd` is
+denied because the path matches a deny-list pattern." L2/L3/L4 are
+**confinement layers** : they don't understand intent, but they bound
+the blast radius if L1 is bypassed (a compromised Claude Code binary
+can only reach `api.anthropic.com` via L2, can only resolve
+`*.anthropic.com` via L3-DNS, can only read paths mounted into the
+container via L3-FS, and runs without privileges via L4). Compromise
+of L1 is therefore *bounded*, not *catastrophic* — but L2/L3/L4 don't
+*replace* L1's semantic decisions. The remaining v0.3 gaps
+(FS-tamper-evident audit log, multi-principal, runtime-smoke-in-CI,
+read_only on sidecars) are documented above.
 
 Full honest limits in [`SECURITY.md` §"Out-of-scope"](SECURITY.md#out-of-scope-honest-limits) and the residual-risks table in [`docs/security/threat-model.md` §7](docs/security/threat-model.md).
 
@@ -125,7 +133,7 @@ Full honest limits in [`SECURITY.md` §"Out-of-scope"](SECURITY.md#out-of-scope-
 
 > **What this project demonstrates mastery of**
 >
-> - 🔒 **Sécurité** — defense-in-depth 4 couches (PreToolUse hook + Cerbos policy + Docker network egress allowlist + container FS confinement). Each layer is independently sufficient against its threat class.
+> - 🔒 **Sécurité** — defense-in-depth : **1 intent layer + 3 confinement layers** ([ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md)). L1 (PreToolUse hook + Cerbos PDP) is the semantic gate that understands the agent's *intent* and decides on policy. L2 (tinyproxy egress allowlist), L3 (dnsmasq DNS allowlist + workspace-only FS mount), and L4 (cap_drop + read_only + seccomp + cgroups) bound the blast radius if L1 is bypassed.
 > - 🤖 **IA** — Claude Code wrapped in a policy-gated container, every tool call (Read / Write / Edit / Bash / WebFetch / MCP / Task) intercepted via the native PreToolUse hook.
 > - 🏛 **Architecture** — Hexagonal-lite Python broker (host) + Cerbos PDP (container) + Claude Code CLI (container) ; clear trust boundary between intent (LLM) and execution (broker).
 > - ✅ **Qualité** — 16 ADRs covering every security and operational decision ; security audit demonstration with 6 red-team scenarios + 2 happy-paths + policy fuzz + 8 static scans, run on every release.
@@ -192,16 +200,18 @@ Full design : see [`docs/architecture.md`](docs/architecture.md) and the [16 ADR
 
 ## Architecture decisions
 
-The 16 ADRs in [`docs/adr/`](docs/adr/) justify every load-bearing choice. Highlights :
+The 22 ADRs in [`docs/adr/`](docs/adr/) justify every load-bearing choice. Highlights :
 
 | # | Decision | Why it matters |
 |---|---|---|
 | [0001](docs/adr/0001-cerbos-as-policy-decision-point.md) | Cerbos as PDP | CNCF, signable, lintable, security-team familiar |
 | [0002](docs/adr/0002-pretooluse-hook-as-interception-point.md) | PreToolUse hook interception | Native Claude Code mechanism — no binary patching |
 | [0009](docs/adr/0009-hook-fails-closed.md) | Hook fails closed | Broker down → DENY by default, never bypass |
-| [0010](docs/adr/0010-network-egress-filter-allowlist.md) | Docker network egress allowlist | Defense-in-depth — survives hook bypass |
-| [0012](docs/adr/0012-defense-in-depth-layers.md) | 4 independent security layers | NIST SP 800-160 V1 §3.4 |
+| [0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md) | L2 tinyproxy CONNECT allowlist | Closes the v0.1 design-only L2 gap |
+| [0020](docs/adr/0020-l3-dns-allowlist-dnsmasq.md) | L3 dnsmasq DNS allowlist | Closes R-DNS-LEAK |
+| [0022](docs/adr/0022-intent-layer-vs-confinement-layers.md) | 1 intent layer + 3 confinement layers | Honest framing — supersedes ADR-0012 |
 | [0016](docs/adr/0016-supply-chain-cosign-sbom.md) | Cosign + SBOM | Provenance per OWASP A08:2021 |
+| [0021](docs/adr/0021-pin-claude-code-npm-version.md) | Pin Claude Code npm + Renovate | Closes the @latest hole in ADR-0008 |
 
 ## License
 

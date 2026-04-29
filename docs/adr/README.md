@@ -30,10 +30,11 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0009](0009-hook-fails-closed.md) | Hook fails closed (DENY on broker unreachable) | Adversary can't bypass by killing the broker |
 | [0010](0010-network-egress-filter-allowlist.md) | Network egress allowlist at Docker network layer | Defense-in-depth ; survives a compromised hook |
 | [0011](0011-no-secret-baked-in-image.md) | No secret baked into image | Image scannable publicly without exposing API keys |
-| [0012](0012-defense-in-depth-layers.md) | Defense-in-depth — 4 independent layers | NIST SP 800-160 V1 §3.4 ; compromise of one layer ≠ system compromise |
+| [0012](0012-defense-in-depth-layers.md) | ~~Defense-in-depth — 4 independent layers~~ | **Superseded by [ADR-0022](0022-intent-layer-vs-confinement-layers.md)** — "4 independently sufficient" framing was overstated |
 | [0017](0017-security-testing-evidence-pipeline.md) | Security testing & evidence pipeline | bandit / pip-audit / trivy / grype / gitleaks / SBOM / cerbos compile gate every release |
 | [0019](0019-l2-egress-proxy-tinyproxy.md) | L2 HTTP egress proxy (tinyproxy with allowlist) | Closes the v0.1 design-only L2 gap ; CONNECT default-deny ; agent can only reach `api.anthropic.com` |
 | [0020](0020-l3-dns-allowlist-dnsmasq.md) | L3 DNS allowlist (dnsmasq forwarder) | Closes R-DNS-LEAK ; agent's resolver returns SERVFAIL for non-allowlisted hostnames |
+| [0022](0022-intent-layer-vs-confinement-layers.md) | 1 intent layer (L1) + 3 confinement layers (L2/L3/L4) | Honest framing — L1 sees intent ; L2/L3/L4 bound blast radius if L1 is bypassed but cannot replace it |
 
 ### Operational envelope (where the code lives, how it's shipped)
 
