@@ -23,6 +23,29 @@ TS="$(date -u +%Y%m%dT%H%M%SZ)"
 REPORTS_DIR="${SCAN_REPORTS_DIR:-${REPO_ROOT}/audit-reports/scans-${TS}}"
 mkdir -p "${REPORTS_DIR}"
 
+# ---------------------------------------------------------------------------
+# Cache directories (ADR-0017, inspired by iris-service-python)
+#
+# CVE database downloads (grype + trivy) are large (~100MB each) and
+# refresh once per day. Without explicit cache dirs, every scan re-downloads.
+# We pin them under ~/.cache/secured-claude-scan/ so :
+#  - Local runs reuse cached DBs across sessions
+#  - CI pipelines mount this dir as a cache: path on the macbook-local runner
+#    (per CLAUDE.md global "use local runners")
+#
+# To force a fresh download: rm -rf ~/.cache/secured-claude-scan/{trivy,grype}
+# ---------------------------------------------------------------------------
+SCAN_CACHE_ROOT="${SCAN_CACHE_ROOT:-${HOME}/.cache/secured-claude-scan}"
+TRIVY_CACHE_DIR="${SCAN_CACHE_ROOT}/trivy"
+GRYPE_DB_CACHE_DIR="${SCAN_CACHE_ROOT}/grype"
+PIP_AUDIT_CACHE_DIR="${SCAN_CACHE_ROOT}/pip-audit"
+mkdir -p "${TRIVY_CACHE_DIR}" "${GRYPE_DB_CACHE_DIR}" "${PIP_AUDIT_CACHE_DIR}"
+
+# Also re-use the in-repo .ruff_cache / .mypy_cache produced by previous runs
+# (gitignored ; never committed).
+export RUFF_CACHE_DIR="${REPO_ROOT}/.ruff_cache"
+export MYPY_CACHE_DIR="${REPO_ROOT}/.mypy_cache"
+
 STRICT="${STRICT:-0}"
 SEVERITY_GATE="HIGH,CRITICAL"
 [[ "${STRICT}" == "1" ]] && SEVERITY_GATE="LOW,MEDIUM,HIGH,CRITICAL"
@@ -70,7 +93,7 @@ if command -v uv >/dev/null 2>&1; then
     run_scan "bandit (B404/B603 skipped — see ADR-0017)" \
         "uv run bandit -r src/ -c pyproject.toml -f json -o '${REPORTS_DIR}/bandit.json' --quiet 2>&1"
     run_scan "pip-audit (Python deps CVE)" \
-        "uv run pip-audit --skip-editable 2>&1 | tee '${REPORTS_DIR}/pip-audit.txt'"
+        "uv run pip-audit --skip-editable --cache-dir '${PIP_AUDIT_CACHE_DIR}' 2>&1 | tee '${REPORTS_DIR}/pip-audit.txt'"
 else
     skip_scan "ruff/mypy/bandit/pip-audit" "uv not found on PATH"
 fi
@@ -92,14 +115,16 @@ fi
 
 if command -v trivy >/dev/null 2>&1; then
     run_scan "trivy fs (deps + secrets + config)" \
-        "trivy fs --scanners vuln,secret,config --severity '${SEVERITY_GATE}' --exit-code 1 --quiet . 2>&1 | tee '${REPORTS_DIR}/trivy.txt'"
+        "trivy fs --scanners vuln,secret,config --severity '${SEVERITY_GATE}' --exit-code 1 --quiet --cache-dir '${TRIVY_CACHE_DIR}' . 2>&1 | tee '${REPORTS_DIR}/trivy.txt'"
 else
     skip_scan "trivy" "not installed (brew install trivy)"
 fi
 
 if command -v grype >/dev/null 2>&1; then
+    # GRYPE_DB_CACHE_DIR is read by grype natively; passing it via env keeps the
+    # invocation readable. Without it, grype re-downloads the ~100MB DB every run.
     run_scan "grype dir (deps CVE cross-check)" \
-        "grype dir:. --fail-on high --quiet 2>&1 | tee '${REPORTS_DIR}/grype.txt'"
+        "GRYPE_DB_CACHE_DIR='${GRYPE_DB_CACHE_DIR}' grype dir:. --fail-on high --quiet 2>&1 | tee '${REPORTS_DIR}/grype.txt'"
 else
     skip_scan "grype" "not installed (brew install grype)"
 fi

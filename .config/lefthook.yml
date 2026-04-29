@@ -1,0 +1,95 @@
+---
+# Lefthook git hooks configuration (inspired by iris-service-python).
+#
+# Lefthook is a fast (Go-based) hook runner. Install :
+#   brew install lefthook        # Mac
+#   go install github.com/evilmartians/lefthook@latest   # Linux/Win
+#
+# Activate :
+#   lefthook install
+#
+# Bypass for emergency push (use sparingly) :
+#   LEFTHOOK=0 git push
+#
+# Pre-commit-time enforcement is faster feedback than CI — devs catch
+# issues before the round-trip. CI still runs the same gates as a
+# safety net.
+
+commit-msg:
+  parallel: false
+  commands:
+    conventional-commits:
+      run: |
+        msg=$(head -n1 {1} | tr -d '\r')
+        # First line: <type>[(<scope>)][!]: <subject>, ≤ 72 chars after the colon
+        regex='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9._/-]+\))?!?: .{1,72}$'
+        if [[ "$msg" =~ $regex ]]; then
+          echo "✓ Conventional Commits format OK"
+        else
+          echo ""
+          echo "✗ commit message violates Conventional Commits 1.0:"
+          echo "    $msg"
+          echo ""
+          echo "  Expected: <type>(<optional scope>): <subject>"
+          echo "  Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+          echo "  Examples:"
+          echo "    feat(broker): add /policy/lint endpoint"
+          echo "    fix(hook): handle empty stdin gracefully"
+          echo "    docs(adr): add ADR-0018 on caching strategy"
+          echo ""
+          echo "  Bypass (emergency only): LEFTHOOK=0 git commit"
+          exit 1
+        fi
+
+pre-commit:
+  parallel: true
+  commands:
+
+    # ───────────────────── Python: lint + format + types ─────────────────────
+    ruff-check:
+      tags: lint python
+      glob: "*.py"
+      run: uv run ruff check {staged_files}
+
+    ruff-format:
+      tags: format python
+      glob: "*.py"
+      run: uv run ruff format --check {staged_files}
+
+    mypy-strict:
+      tags: types python
+      glob: "*.py"
+      run: uv run mypy {staged_files}
+
+    # ───────────────────── Cerbos: policy compile ────────────────────────────
+    cerbos-compile:
+      tags: policy
+      glob: "policies/*.yaml"
+      run: |
+        docker run --rm -v "$PWD/policies:/policies:ro" \
+          cerbos/cerbos:0.42.0 compile /policies
+
+    # ───────────────────── Shell: shellcheck + executable bit ────────────────
+    shellcheck:
+      tags: shell lint
+      glob: "{**/*.sh,bin/*}"
+      run: shellcheck {staged_files}
+
+    # ───────────────────── Secret leak detection ─────────────────────────────
+    gitleaks-staged:
+      tags: secrets
+      run: |
+        gitleaks protect --staged --redact --no-banner --exit-code 1
+
+    # ───────────────────── .env parity (avoid CI surprises) ──────────────────
+    env-keys-in-sync:
+      glob: "{.env,.env.example}"
+      run: |
+        if [ ! -f .env ]; then exit 0; fi
+        ex=$(grep -oE '^[A-Z_][A-Z0-9_]*=' .env.example 2>/dev/null | sort -u)
+        en=$(grep -oE '^[A-Z_][A-Z0-9_]*=' .env 2>/dev/null | sort -u)
+        diff <(echo "$ex") <(echo "$en") > /dev/null 2>&1 || {
+            echo "⚠ .env keys diverge from .env.example — sync them or update the template."
+            diff <(echo "$ex") <(echo "$en") || true
+            exit 1
+        }

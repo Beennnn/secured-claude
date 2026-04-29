@@ -38,6 +38,41 @@ A separate stream produces a **Software Bill of Materials** (SBOM) :
 - On `dev` once a week (Renovate co-occurrence)
 - On any CHANGELOG entry that contains `security:` or `BREAKING CHANGE`
 
+### Caching (so dev iteration is fast)
+
+CVE-database scanners (grype, trivy) download ~100 MB feed files. Without
+caching, every run pays that bandwidth cost. We pin scanner caches under
+`~/.cache/secured-claude-scan/{trivy,grype,pip-audit}` so :
+
+- Local dev iteration is sub-second after the first warm-up
+- CI mounts the same path as a `cache:` declaration on the `macbook-local`
+  GitLab runner — refreshing the DB once per day, reusing it across pipeline
+  runs in the same day
+- A forced re-download is a one-line `rm -rf ~/.cache/secured-claude-scan/`
+
+Plus the in-repo `.ruff_cache/` and `.mypy_cache/` are exported via
+`RUFF_CACHE_DIR` + `MYPY_CACHE_DIR` so they survive across `bin/security-
+scans.sh` invocations. Both are in `.gitignore`.
+
+This pattern is borrowed from `iris-service-python`'s
+`.gitlab-ci/quality.yml` ; see the project history for the SonarCloud +
+grype cache strategy that informed it.
+
+### Pre-commit (lefthook)
+
+`.config/lefthook.yml` reproduces a subset of the security pipeline at
+**commit time**, so devs catch problems before pushing :
+
+- Conventional Commits format on every commit message
+- ruff check + ruff format + mypy --strict on staged Python files
+- `cerbos compile` when staged files include `policies/*.yaml`
+- shellcheck on staged shell scripts
+- `gitleaks protect --staged --redact` to catch accidental secrets
+- `.env` ↔ `.env.example` key parity
+
+Bypass for emergencies : `LEFTHOOK=0 git commit`. CI still runs the full
+suite — lefthook is fast feedback, not the trust boundary.
+
 ### Where evidence lives
 
 - **`docs/security/security-evidence.md`** — captures the output of the latest known-good run, with date stamp and tool versions. Updated each time we tag a release.
