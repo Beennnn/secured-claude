@@ -1,0 +1,57 @@
+---
+# Release stage — GitLab Release on tags, with assets.
+
+release:gitlab:
+  stage: release
+  rules:
+    - if: $CI_COMMIT_TAG
+  needs: [publish:pypi, publish:cosign-sign, security:sbom]
+  script:
+    - |
+      cat <<EOF > release-description.md
+      # secured-claude ${CI_COMMIT_TAG}
+
+      Claude Code wrapper, secured by design. Defense-in-depth across
+      4 layers ; every tool call gated by Cerbos PDP ; every decision
+      logged in append-only SQLite.
+
+      ## Verify the artifacts
+
+      \`\`\`bash
+      # Image signature (cosign keyless OIDC, see ADR-0016)
+      cosign verify \\
+        ${CI_REGISTRY_IMAGE}/claude-code:${CI_COMMIT_TAG} \\
+        --certificate-identity-regexp '^https://gitlab.com/benoit.besson/secured-claude' \\
+        --certificate-oidc-issuer https://gitlab.com
+
+      # SBOM (SPDX 2.3)
+      grype sbom:secured-claude-${CI_COMMIT_TAG}-sbom.spdx.json
+      \`\`\`
+
+      ## Install
+
+      \`\`\`bash
+      # Mac / Linux
+      curl -sSL https://gitlab.com/benoit.besson/secured-claude/-/raw/main/install.sh | bash
+
+      # Windows
+      irm https://gitlab.com/benoit.besson/secured-claude/-/raw/main/install.ps1 | iex
+      \`\`\`
+
+      ## Security evidence
+
+      The CI security stage attached :
+      - SBOM (SPDX 2.3)
+      - trivy.json (filesystem multi-faceted scan)
+      - grype.json (dep CVE cross-check)
+      - gitleaks.json (secret scan)
+      - audit-reports/ (full bin/security-scans.sh output)
+
+      ADR-0017 details the pipeline. SECURITY.md describes the threat model.
+      EOF
+    - >
+      release-cli create
+      --name "secured-claude ${CI_COMMIT_TAG}"
+      --description "$(cat release-description.md)"
+      --tag-name "${CI_COMMIT_TAG}"
+      --assets-link "{\"name\":\"sbom-spdx\",\"url\":\"${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/raw/sbom.spdx.json\",\"link_type\":\"other\"}"

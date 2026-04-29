@@ -1,0 +1,39 @@
+---
+# Build stage — Python wheel + sdist, multi-arch container image.
+
+build:python:
+  stage: build
+  <<: *cache-uv
+  script:
+    - uv sync --all-extras
+    - uv build
+    - ls -la dist/
+  artifacts:
+    paths: [dist/]
+    expire_in: 90 days
+
+build:image:
+  stage: build
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - |
+      TAGS="-t ${CI_REGISTRY_IMAGE}/claude-code:${CI_COMMIT_SHA}"
+      if [ -n "${CI_COMMIT_TAG}" ]; then
+        TAGS="$TAGS -t ${CI_REGISTRY_IMAGE}/claude-code:${CI_COMMIT_TAG}"
+      fi
+      if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
+        TAGS="$TAGS -t ${CI_REGISTRY_IMAGE}/claude-code:latest"
+      fi
+    - docker buildx create --use --name secured-claude-builder --bootstrap || true
+    - >
+      docker buildx build
+      --platform linux/amd64,linux/arm64
+      --cache-from "type=registry,ref=${CI_REGISTRY_IMAGE}/claude-code:cache"
+      --cache-to "type=registry,ref=${CI_REGISTRY_IMAGE}/claude-code:cache,mode=max"
+      ${TAGS}
+      --push
+      -f Dockerfile.claude-code
+      .

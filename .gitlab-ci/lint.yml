@@ -1,0 +1,86 @@
+---
+# Lint stage — fast, parallel feedback on style / types / shell / docker / policy.
+# Every job in this stage must pass before subsequent stages run.
+
+# ---------------------------------------------------------------------------
+# Python lint — ruff + format + import-order
+# ---------------------------------------------------------------------------
+
+lint:ruff:
+  stage: lint
+  <<: *cache-uv-incremental
+  script:
+    - uv sync --all-extras
+    - uv run ruff check src/ tests/
+    - uv run ruff format --check src/ tests/
+
+# ---------------------------------------------------------------------------
+# Python types — mypy --strict
+# ---------------------------------------------------------------------------
+
+lint:mypy:
+  stage: lint
+  <<: *cache-uv-incremental
+  script:
+    - uv sync --all-extras
+    - uv run mypy src/
+
+# ---------------------------------------------------------------------------
+# Dockerfile lint — hadolint
+# ---------------------------------------------------------------------------
+
+lint:hadolint:
+  stage: lint
+  script:
+    - docker run --rm -i hadolint/hadolint < Dockerfile.claude-code
+
+# ---------------------------------------------------------------------------
+# Shell lint — shellcheck
+# ---------------------------------------------------------------------------
+
+lint:shellcheck:
+  stage: lint
+  script:
+    - shellcheck docker/entrypoint.sh
+    - shellcheck bin/*.sh
+
+# ---------------------------------------------------------------------------
+# Cerbos policy compile — confirms the L1 of defense-in-depth is well-formed
+# ---------------------------------------------------------------------------
+
+lint:cerbos-compile:
+  stage: lint
+  script:
+    - docker run --rm -v "$PWD/policies:/policies:ro" cerbos/cerbos:0.42.0 compile /policies
+
+# ---------------------------------------------------------------------------
+# Conventional Commits — verify all commits in the MR / branch follow CC 1.0
+# ---------------------------------------------------------------------------
+
+lint:commits:
+  stage: lint
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "dev"
+  script:
+    - |
+      if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
+        BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-origin/main}"
+      else
+        BASE="origin/main"
+      fi
+      git fetch origin main:refs/remotes/origin/main
+      regex='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9._/-]+\))?!?: .{1,72}$'
+      bad=0
+      for sha in $(git rev-list "${BASE}..HEAD"); do
+        msg=$(git log -1 --pretty=%s "$sha")
+        if ! [[ "$msg" =~ $regex ]]; then
+          echo "✗ $sha — $msg"
+          bad=$((bad+1))
+        fi
+      done
+      if [ "$bad" -gt 0 ]; then
+        echo "$bad commit(s) violate Conventional Commits 1.0"
+        exit 1
+      fi
+      echo "✓ All commits follow Conventional Commits 1.0"

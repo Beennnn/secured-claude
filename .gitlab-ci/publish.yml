@@ -1,0 +1,34 @@
+---
+# Publish stage — only on tags. Wheel → GitLab Package Registry,
+# image already pushed by build:image, cosign keyless signs it.
+
+publish:pypi:
+  stage: publish
+  rules:
+    - if: $CI_COMMIT_TAG
+  needs: [build:python]
+  <<: *cache-uv
+  script:
+    - uv sync --all-extras
+    - uv run python -m pip install --quiet twine
+    - >
+      uv run twine upload
+      --repository-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi"
+      -u gitlab-ci-token -p "${CI_JOB_TOKEN}"
+      dist/*
+
+publish:cosign-sign:
+  stage: publish
+  rules:
+    - if: $CI_COMMIT_TAG
+  needs: [build:image]
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - cosign sign --yes "${CI_REGISTRY_IMAGE}/claude-code:${CI_COMMIT_TAG}"
+    - cosign verify
+        "${CI_REGISTRY_IMAGE}/claude-code:${CI_COMMIT_TAG}"
+        --certificate-identity-regexp "^https://gitlab.com/benoit.besson/secured-claude"
+        --certificate-oidc-issuer https://gitlab.com
