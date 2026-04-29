@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
+from secured_claude import __version__
 from secured_claude.cerbos_client import CerbosClient, CheckResult
 from secured_claude.store import Store
 
@@ -108,7 +109,7 @@ def make_app(
     )
     audit_store = store or Store()
 
-    app = FastAPI(title="secured-claude broker", version="0.1.0")
+    app = FastAPI(title="secured-claude broker", version=__version__)
 
     @app.post("/check", response_model=CheckResponse)
     def check(req: CheckRequest) -> CheckResponse:

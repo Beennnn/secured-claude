@@ -31,6 +31,7 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0010](0010-network-egress-filter-allowlist.md) | Network egress allowlist at Docker network layer | Defense-in-depth ; survives a compromised hook |
 | [0011](0011-no-secret-baked-in-image.md) | No secret baked into image | Image scannable publicly without exposing API keys |
 | [0012](0012-defense-in-depth-layers.md) | Defense-in-depth — 4 independent layers | NIST SP 800-160 V1 §3.4 ; compromise of one layer ≠ system compromise |
+| [0017](0017-security-testing-evidence-pipeline.md) | Security testing & evidence pipeline | bandit / pip-audit / trivy / grype / gitleaks / SBOM / cerbos compile gate every release |
 
 ### Operational envelope (where the code lives, how it's shipped)
 
@@ -40,6 +41,7 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0014](0014-gitlab-ci-pipeline-6-stages.md) | GitLab CI pipeline with 6 stages | lint → test → security → build → publish → release ; security stage gates releases |
 | [0015](0015-distribution-pipx-gitlab-registry.md) | Distribution via pipx + GitLab Package Registry | One-command cross-OS install ; no MSI / pkg / snap over-engineering |
 | [0016](0016-supply-chain-cosign-sbom.md) | Supply-chain provenance — cosign keyless OIDC + Syft SBOM | Signed images, SPDX SBOM ; OWASP A08 covered |
+| [0018](0018-hatch-vcs-version-from-git-tag.md) | Package version derived from git tag (hatch-vcs) | Each tag → unique wheel filename ; replaces v0.1.x publish:pypi shell-wrap shim |
 
 ## Reading order suggestion
 

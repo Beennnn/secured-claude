@@ -10,6 +10,13 @@ build:python:
       paths: [.venv/, .uv-cache/]
       policy: pull-push
   before_script:
+    # hatch-vcs reads the package version from the latest git tag (ADR-0018).
+    # The bookworm-slim image doesn't bundle git ; install it so `uv build`
+    # can resolve the version. The Kaniko build:image job uses a different
+    # base and doesn't need this.
+    - apt-get update -qq && apt-get install -y --no-install-recommends git
+    # GitLab clones with depth=20 by default — ensure the tag is reachable.
+    - git fetch --tags --depth=100 || true
     - uv sync --all-extras --frozen
   script:
     - uv build
