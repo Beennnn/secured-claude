@@ -234,3 +234,62 @@ def test_load_principals_missing_file_returns_default(tmp_path: Path) -> None:
     out = load_principals(tmp_path / "nonexistent.yaml")
     assert "claude-code-default" in out
     assert out["claude-code-default"]["attributes"] == {"trust_level": 0}
+
+
+def test_load_principals_malformed_yaml_returns_default(tmp_path: Path) -> None:
+    """Malformed YAML → fallback (we never fail-closed on the principals file)."""
+    p = tmp_path / "bad.yaml"
+    p.write_text("principals:\n  - invalid:: not a dict\n  malformed: [\n", encoding="utf-8")
+    out = load_principals(p)
+    assert "claude-code-default" in out
+
+
+def test_load_principals_missing_top_key_returns_default(tmp_path: Path) -> None:
+    """YAML without `principals:` top key → fallback."""
+    p = tmp_path / "no-key.yaml"
+    p.write_text("other_section:\n  foo: bar\n", encoding="utf-8")
+    out = load_principals(p)
+    assert out == {"claude-code-default": {"roles": ["agent"], "attributes": {"trust_level": 0}}}
+
+
+def test_load_principals_skips_invalid_entries(tmp_path: Path) -> None:
+    """Entries that aren't dicts, or where roles/attributes have wrong types,
+    are dropped silently. Default is still injected at the end."""
+    p = tmp_path / "mixed.yaml"
+    p.write_text(
+        """
+principals:
+  good-principal:
+    roles: [agent]
+    attributes:
+      trust_level: 1
+  bad-roles:
+    roles: "not a list"
+    attributes: {}
+  bad-attributes:
+    roles: [agent]
+    attributes: "not a dict"
+  not-a-dict: 42
+""",
+        encoding="utf-8",
+    )
+    out = load_principals(p)
+    assert "good-principal" in out
+    assert "bad-roles" not in out
+    assert "bad-attributes" not in out
+    assert "not-a-dict" not in out
+    # Default always injected
+    assert "claude-code-default" in out
+
+
+def test_load_principals_env_override(tmp_path: Path, monkeypatch) -> None:
+    """SECURED_CLAUDE_PRINCIPALS env points the loader at a non-default path."""
+    p = tmp_path / "env.yaml"
+    p.write_text(
+        "principals:\n  custom-from-env:\n    roles: [agent]\n    attributes: {trust_level: 2}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SECURED_CLAUDE_PRINCIPALS", str(p))
+    out = load_principals()  # no path arg → reads env
+    assert "custom-from-env" in out
+    assert out["custom-from-env"]["attributes"]["trust_level"] == 2
