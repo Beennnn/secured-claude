@@ -184,9 +184,7 @@ class Store:
 
     def _last_row_hash(self, conn: sqlite3.Connection) -> str:
         """Return the most recent row's row_hash, or GENESIS_PREV_HASH if empty."""
-        row = conn.execute(
-            "SELECT row_hash FROM approvals ORDER BY id DESC LIMIT 1"
-        ).fetchone()
+        row = conn.execute("SELECT row_hash FROM approvals ORDER BY id DESC LIMIT 1").fetchone()
         if row is None or row["row_hash"] is None:
             return GENESIS_PREV_HASH
         return str(row["row_hash"])
@@ -261,9 +259,7 @@ class Store:
         columns.
         """
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM approvals ORDER BY id ASC"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM approvals ORDER BY id ASC").fetchall()
         prev_hash: str | None = None
         for row in rows:
             stored_prev = row["prev_hash"]

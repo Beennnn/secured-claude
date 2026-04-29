@@ -182,10 +182,7 @@ def cmd_audit_verify(args: argparse.Namespace) -> int:
     if break_found is None:
         console.print(f"[green]✓ chain intact across {n} row(s)[/green]")
         return 0
-    console.print(
-        f"[red]✗ chain broken at row #{break_found.row_id}[/red] "
-        f"(ts={break_found.ts})"
-    )
+    console.print(f"[red]✗ chain broken at row #{break_found.row_id}[/red] (ts={break_found.ts})")
     console.print(f"  reason  : {break_found.reason}")
     console.print(f"  expected: {break_found.expected_hash}")
     console.print(f"  actual  : {break_found.actual_hash}")
