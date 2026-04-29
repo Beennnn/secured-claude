@@ -75,8 +75,7 @@ security:grype:
   <<: *security-base
   script:
     - mkdir -p "${SCAN_CACHE_ROOT}/grype"
-    - GRYPE_DB_CACHE_DIR="${SCAN_CACHE_ROOT}/grype"
-        grype dir:. --fail-on high --output json --file grype.json
+    - 'GRYPE_DB_CACHE_DIR="${SCAN_CACHE_ROOT}/grype" grype dir:. --fail-on high --output json --file grype.json'
   artifacts:
     when: always
     paths: [grype.json]
@@ -89,8 +88,8 @@ security:grype:
 security:sbom:
   stage: security
   script:
-    - syft scan dir:. -o spdx-json=sbom.spdx.json --quiet
-    - jq '{packages: (.packages | length), files: ((.files // []) | length)}' sbom.spdx.json
+    - "syft scan dir:. -o spdx-json=sbom.spdx.json --quiet"
+    - "jq '{packages: (.packages | length), files: ((.files // []) | length)}' sbom.spdx.json"
   artifacts:
     paths: [sbom.spdx.json]
     expire_in: 1 year   # Long retention — used for retroactive CVE scans
