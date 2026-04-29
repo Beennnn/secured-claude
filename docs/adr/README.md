@@ -35,6 +35,7 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0019](0019-l2-egress-proxy-tinyproxy.md) | L2 HTTP egress proxy (tinyproxy with allowlist) | Closes the v0.1 design-only L2 gap ; CONNECT default-deny ; agent can only reach `api.anthropic.com` |
 | [0020](0020-l3-dns-allowlist-dnsmasq.md) | L3 DNS allowlist (dnsmasq forwarder) | Closes R-DNS-LEAK ; agent's resolver returns SERVFAIL for non-allowlisted hostnames |
 | [0022](0022-intent-layer-vs-confinement-layers.md) | 1 intent layer (L1) + 3 confinement layers (L2/L3/L4) | Honest framing — L1 sees intent ; L2/L3/L4 bound blast radius if L1 is bypassed but cannot replace it |
+| [0024](0024-hash-chain-audit-log.md) | Hash-chain audit log (tamper-evident) | SHA-256 chain over each row ; `secured-claude audit-verify` exits 1 if a row was modified or removed |
 
 ### Operational envelope (where the code lives, how it's shipped)
 

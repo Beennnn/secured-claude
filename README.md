@@ -87,7 +87,7 @@ The remaining gaps below are documented ahead of being live.
 
 | Item | v0.2 reality | When it goes live |
 |---|---|---|
-| **Audit log tamper-evidence at FS layer** | App + SQLite trigger refuse `UPDATE`/`DELETE` on `approvals` (tested). But a `rm approvals.db` from another process succeeds — the log is not tamper-EVIDENT, just append-only at the SQL boundary. | v0.3 — hash-chain entries (each row's hash includes previous), optional SIEM JSONL forward |
+| **Audit log tamper-evidence at FS layer** | **v0.3 closes this** ([ADR-0024](docs/adr/0024-hash-chain-audit-log.md)) — SHA-256 chain over each row (`prev_hash`, `row_hash` columns) ; `secured-claude audit-verify` walks the chain and exits non-zero on the first detected break. `rm approvals.db` followed by re-creation is still possible but produces a chain that starts at id=1 with genesis prev_hash next to a recent ts — a forensic smoking gun. External hash anchor (QLDB / blockchain) tracked v0.4+. | Done in v0.3 — `secured-claude audit-verify` |
 | **Multi-principal Cerbos roles** | `derived_roles.yaml` defines them ; broker hardcodes single principal `claude-code-default` | v0.3 |
 | **Runtime smoke in CI** (real claude binary call) | Recipe exists (`secured-claude up && claude -p ...`), runs locally pre-tag ; not yet a CI job | v0.3 — uses a test API key in a GitLab CI variable |
 | **read_only on egress-proxy / dns-filter sidecars** | Trade-off accepted v0.2 : alpine + apk-install at boot pattern needs writable /etc /usr /var. Other L4 hardening (cap_drop ALL, no_new_privileges, mem_limit, no host volumes) still applies. | v0.3 — pre-build dns-filter / egress-proxy as their own signed images |
