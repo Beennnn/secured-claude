@@ -4,6 +4,8 @@
 - **Date**: 2026-04-29
 - **Deciders**: Benoit Besson
 
+> **Note on terminology** — occurrences of `secured-claude/secured-claude` below refer to the *rejected* alternative GitLab namespace (a dedicated `secured-claude` group containing a `secured-claude` project), NOT a stale URL. The actual current namespace is `benoit.besson/secured-claude` (see "Decision → Namespace"). These textual references are deliberate and document the rejected option per ADR conventions ; they must not be rewritten to `benoit.besson/secured-claude` by automated cleanups.
+
 ## Context
 
 Where does the project live, and how is it structured ?
