@@ -1,0 +1,83 @@
+# Architecture Decision Records — secured-claude
+
+This directory contains the project's Architecture Decision Records (ADRs), following the [Nygard format](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions). Every load-bearing security or operational decision in this codebase has an ADR — so a security or architecture review can verify the **why** of each choice without re-deriving it.
+
+## Format
+
+See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR has :
+
+- **Status** — Proposed / Accepted / Deprecated / Superseded
+- **Context** — what forces and constraints shape the decision
+- **Decision** — what we decided, in active voice
+- **Consequences** — what becomes easier, harder, or riskier (positive / negative / neutral)
+- **Alternatives considered** — what we rejected and why
+- **References** — code, RFCs, related ADRs
+
+## Index
+
+### Security architecture (the "secured by design" core)
+
+| # | Title | Justification snapshot |
+|---|---|---|
+| [0001](0001-cerbos-as-policy-decision-point.md) | Cerbos as the Policy Decision Point | CNCF Sandbox, Git-versioned policies, signable bundles, security-team familiar |
+| [0002](0002-pretooluse-hook-as-interception-point.md) | PreToolUse hook as the interception point | Native Claude Code mechanism — no binary patching ; sub-50ms overhead |
+| [0003](0003-default-deny-for-shell-network-mcp.md) | Default-deny for shell / network / MCP | Closed-surface allowlist > whack-a-mole denylist (OWASP A01) |
+| [0004](0004-append-only-sqlite-audit-log.md) | Append-only SQLite audit log | Compliance-ready, queryable, single-file, cross-platform, INSERT-only schema |
+| [0005](0005-containerised-claude-code.md) | Containerised Claude Code, not host-installed | Process + FS isolation, environment reproducibility, bounded blast radius |
+| [0006](0006-host-side-broker.md) | Host-side broker, not container-side | Trust boundary clarity ; broker controls Docker, untrusted agent can't tamper |
+| [0007](0007-cross-platform-via-docker-sdk.md) | Cross-platform via Docker SDK + `host.docker.internal` | One codebase for Mac / Linux / Windows ; no OS-specific shortcuts |
+| [0008](0008-pin-upstream-images-and-deps.md) | Pin every upstream image & dep | Supply-chain : digest pinning, lockfiles, no `:latest` |
+| [0009](0009-hook-fails-closed.md) | Hook fails closed (DENY on broker unreachable) | Adversary can't bypass by killing the broker |
+| [0010](0010-network-egress-filter-allowlist.md) | Network egress allowlist at Docker network layer | Defense-in-depth ; survives a compromised hook |
+| [0011](0011-no-secret-baked-in-image.md) | No secret baked into image | Image scannable publicly without exposing API keys |
+| [0012](0012-defense-in-depth-layers.md) | Defense-in-depth — 4 independent layers | NIST SP 800-160 V1 §3.4 ; compromise of one layer ≠ system compromise |
+
+### Operational envelope (where the code lives, how it's shipped)
+
+| # | Title | Justification snapshot |
+|---|---|---|
+| [0013](0013-gitlab-mono-repo-v01.md) | GitLab hosting + mono-repo for v0.1 | Personal namespace ; mirror to GitHub ; polyrepo split deferred to organic demand |
+| [0014](0014-gitlab-ci-pipeline-6-stages.md) | GitLab CI pipeline with 6 stages | lint → test → security → build → publish → release ; security stage gates releases |
+| [0015](0015-distribution-pipx-gitlab-registry.md) | Distribution via pipx + GitLab Package Registry | One-command cross-OS install ; no MSI / pkg / snap over-engineering |
+| [0016](0016-supply-chain-cosign-sbom.md) | Supply-chain provenance — cosign keyless OIDC + Syft SBOM | Signed images, SPDX SBOM ; OWASP A08 covered |
+
+## Reading order suggestion
+
+For a **security reviewer** evaluating "is this really secured by design ?" :
+
+1. [0012](0012-defense-in-depth-layers.md) — the 4-layer architecture in one read
+2. [0001](0001-cerbos-as-policy-decision-point.md) + [0002](0002-pretooluse-hook-as-interception-point.md) — the L1 mechanism
+3. [0010](0010-network-egress-filter-allowlist.md) + [0005](0005-containerised-claude-code.md) — L2 + L3 layers
+4. [0009](0009-hook-fails-closed.md) — the no-bypass property
+5. [0004](0004-append-only-sqlite-audit-log.md) — the audit posture
+6. [0003](0003-default-deny-for-shell-network-mcp.md) — the closed-surface principle
+7. [0008](0008-pin-upstream-images-and-deps.md) + [0016](0016-supply-chain-cosign-sbom.md) — supply chain
+
+For a **new contributor** ramping up :
+
+1. The [README](../../README.md) for the pitch
+2. [SECURITY.md](../../SECURITY.md) for the policy
+3. ADRs in numeric order (0001 → 0016)
+
+## When to add a new ADR
+
+- Any decision that constrains future development (we'd refer back to "why did we do X ?")
+- Any security-relevant choice — even small ones
+- Any choice with a non-obvious alternative — capture the rejected paths
+- Any organizational convention (CI structure, branching, release flow)
+
+## When NOT to add an ADR
+
+- Stylistic preferences (4 vs 2 spaces)
+- Obvious / forced choices (using Python because the project is Python)
+- Pure bug fixes or feature additions inside an established pattern
+
+## Updating an ADR
+
+ADRs are **immutable once accepted**. To change a decision :
+
+- Mark the old ADR as `Status: Superseded by ADR-XXXX`
+- Write a new ADR explaining the new decision and why the old one no longer holds
+- Cross-link both
+
+This preserves the historical reasoning, which is the entire point of ADRs.
