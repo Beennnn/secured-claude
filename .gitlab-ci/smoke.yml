@@ -64,3 +64,64 @@ smoke:runtime:
       docker run --rm --entrypoint sh "$CI_REGISTRY_IMAGE/egress-proxy:$CI_COMMIT_SHA"
       -c 'tinyproxy -v 2>&1 | head -1'
     - echo "✓ runtime smoke — all 3 images boot cleanly, hook wired correctly"
+
+# ---------------------------------------------------------------------------
+# Real-LLM smoke (ADR-0030) — MANUAL-TRIGGER ONLY.
+#
+# Burns Anthropic API budget (~$0.01 per run) so we never auto-run it.
+# Available on tag pipelines as a manual button : an operator clicks it
+# AFTER setting `ANTHROPIC_API_KEY_SMOKE` as a protected GitLab CI variable.
+#
+# Scope (v0.4) : runs `claude -p "..."` against the just-built agent image
+# WITHOUT the broker/sidecars/Cerbos. Proves the agent image can reach
+# api.anthropic.com end-to-end with a real key. Doesn't prove the L1 gate
+# (audit-demo already does that). v0.4.1 ticket : full-stack smoke that
+# also boots cerbos + sidecars + broker for a true end-to-end validation.
+# ---------------------------------------------------------------------------
+
+smoke:llm-real:
+  stage: smoke
+  image: docker:24-cli
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: manual
+      allow_failure: true   # manual-trigger ; never block the pipeline
+  needs:
+    - build:image
+    - job: build:image:manifest
+      optional: true
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+  script:
+    - |
+      if [ -z "${ANTHROPIC_API_KEY_SMOKE:-}" ]; then
+        echo ""
+        echo "FATAL: ANTHROPIC_API_KEY_SMOKE protected variable is not set."
+        echo ""
+        echo "To enable this smoke :"
+        echo "  1. Settings → CI/CD → Variables → Add"
+        echo "       Key      : ANTHROPIC_API_KEY_SMOKE"
+        echo "       Value    : (an Anthropic API key with budget for smoke runs)"
+        echo "       Protect  : true   (only available on protected refs / tags)"
+        echo "       Mask     : true   (redacted from job logs)"
+        echo "  2. Re-trigger this manual job."
+        echo ""
+        exit 1
+      fi
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker pull "$CI_REGISTRY_IMAGE/claude-code:$CI_COMMIT_SHA"
+    # Run claude with the operator's API key. The agent container has the
+    # hook wired but no broker is reachable here — `host.docker.internal:8765`
+    # returns connection-refused, the hook fails closed (ADR-0009), and
+    # claude refuses every tool call. So we send a no-tool prompt that
+    # claude can answer from its own model state without invoking Read /
+    # Bash / WebFetch.
+    - >
+      OUTPUT=$(docker run --rm
+      -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY_SMOKE"
+      "$CI_REGISTRY_IMAGE/claude-code:$CI_COMMIT_SHA"
+      claude -p "Respond with exactly one word: pong" 2>&1)
+      || { echo "claude exec failed: $OUTPUT" ; exit 1 ; }
+      echo "Claude said: $OUTPUT"
+      echo "$OUTPUT" | grep -qi "pong" || { echo "expected 'pong' in response"; exit 1; }
+    - echo "✓ real-LLM smoke green — agent reached api.anthropic.com end-to-end"
