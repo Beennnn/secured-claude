@@ -1,0 +1,16 @@
+# RFC 9116 — Security Contact File for secured-claude
+# https://www.rfc-editor.org/rfc/rfc9116
+
+Contact: mailto:benoit.besson+secured-claude-security@gmail.com
+Contact: https://gitlab.com/benoit.besson/secured-claude/-/issues/new?issuable_template=security&issue%5Bconfidential%5D=true
+Expires: 2027-04-29T00:00:00.000Z
+Preferred-Languages: en, fr
+Canonical: https://gitlab.com/benoit.besson/secured-claude/-/raw/main/.well-known/security.txt
+Policy: https://gitlab.com/benoit.besson/secured-claude/-/blob/main/docs/security/vulnerability-disclosure.md
+Acknowledgments: https://gitlab.com/benoit.besson/secured-claude/-/blob/main/docs/security/hall-of-fame.md
+Hiring: https://gitlab.com/benoit.besson
+
+# Disclosure timeline: 90 days standard, 30-day extension on mutual agreement.
+# Safe harbor: good-faith research within scope is welcome and will not be pursued legally.
+# In-scope: code in src/, policies in policies/, Dockerfile.claude-code, CI pipeline, hooks.
+# Out-of-scope: upstream Anthropic Claude Code binary, Cerbos PDP itself, kernel CVEs.

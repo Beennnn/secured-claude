@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="secured-claude logo: a shield with a bold C and an inner shield outline">
+  <title>secured-claude</title>
+  <desc>A rounded charcoal square framing two concentric shield outlines (defense-in-depth) wrapping a serif capital C (Claude). Cream and Cerbos-orange accents.</desc>
+
+  <!-- Background: warm dark charcoal, slight rounding -->
+  <rect width="256" height="256" rx="48" fill="#1a1715"/>
+
+  <!-- Outer shield (L1+L2 = application + network defense layers) -->
+  <path d="M128 24
+           L218 60
+           L218 134
+           C218 190 178 222 128 236
+           C78 222 38 190 38 134
+           L38 60 Z"
+        fill="#241d1a"
+        stroke="#c8b3a8"
+        stroke-width="4"
+        stroke-linejoin="round"/>
+
+  <!-- Inner shield (L3+L4 = filesystem + container hardening layers) -->
+  <path d="M128 52
+           L194 80
+           L194 134
+           C194 174 168 200 128 212
+           C88 200 62 174 62 134
+           L62 80 Z"
+        fill="none"
+        stroke="#ff6b35"
+        stroke-width="2.75"
+        stroke-linejoin="round"
+        opacity="0.9"/>
+
+  <!-- Stylized serif capital C — the "Claude" mark -->
+  <text x="128"
+        y="172"
+        font-family="Georgia, 'Palatino Linotype', 'Book Antiqua', Palatino, 'Times New Roman', serif"
+        font-size="124"
+        font-weight="700"
+        fill="#c8b3a8"
+        text-anchor="middle"
+        letter-spacing="-4"
+        dominant-baseline="alphabetic">C</text>
+
+  <!-- Small lock-clasp accent at the top — visual cue for "secured" -->
+  <rect x="120" y="8" width="16" height="6" rx="2" fill="#ff6b35" opacity="0.85"/>
+</svg>
