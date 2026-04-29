@@ -1,0 +1,87 @@
+---
+# CI-only override (ADR-0033) — adds the broker as a 5th container so
+# full-stack smoke tests can boot the entire stack inside Docker without
+# a host-side broker process.
+#
+# Production posture stays per ADR-0006 : broker runs HOST-SIDE so the
+# trust boundary between the LLM-controlled agent and the policy logic
+# is "container ↔ host" (broker has no kernel access from a hostile
+# agent) rather than "container ↔ container" (sibling containers on
+# the same Docker network).
+#
+# Usage :
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+#   bin/test-full-stack.sh   # exercises the gate end-to-end
+#
+# When the FILE name ends in `.ci.yml` rather than `.yml`, docker compose
+# treats it as additive overlay — only the keys defined here are merged
+# onto the base.
+
+name: secured-claude
+
+services:
+  broker:
+    build:
+      context: .
+      dockerfile: Dockerfile.broker
+      args:
+        # SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SECURED_CLAUDE — hatch-vcs
+        # can't read git inside the container ; we synthesise the version
+        # from CI env or the local "0.5.0+container" default.
+        SECURED_CLAUDE_VERSION: ${SECURED_CLAUDE_VERSION:-0.5.0+container}
+    image: secured-claude/broker:0.5.0
+    container_name: secured-claude-broker
+    restart: unless-stopped
+    user: "1001:1001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m
+      # The audit DB writes to /home/broker/.local/share/secured-claude/
+      # — tmpfs in CI keeps smokes ephemeral. Production runs the broker
+      # host-side ; not affected by this CI-only override.
+      - /home/broker/.local:rw,nosuid,nodev,size=128m,uid=1001,gid=1001
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      secured-claude-net:
+        ipv4_address: 172.30.42.6
+    ports:
+      # Bound to localhost only — matches the host-side broker's posture
+      # where 8765 is reachable only from the docker bridge.
+      - "127.0.0.1:8765:8765"
+    environment:
+      # Cerbos URL — the broker calls Cerbos at the cerbos service IP.
+      # /29 subnet : 172.30.42.2 = cerbos (per docker-compose.yml).
+      CERBOS_URL: "http://172.30.42.2:3592"
+      # Where the broker reads the principals YAML. config/principals.yaml
+      # is COPYed into the image at build time ; this env makes the path
+      # explicit for clarity.
+      SECURED_CLAUDE_PRINCIPALS: "/app/config/principals.yaml"
+    depends_on:
+      cerbos:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8765/health | grep -q ok || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+    mem_limit: 256m
+
+  # Override the agent : in CI mode, point its hook at the broker
+  # CONTAINER (not host.docker.internal). Production deployments that
+  # use only docker-compose.yml keep the v0.4 host-side semantics.
+  claude-code:
+    environment:
+      # Agent's hook POSTs to this URL on every tool call.
+      SECURED_CLAUDE_BROKER: "http://172.30.42.6:8765"
+    depends_on:
+      cerbos:
+        condition: service_healthy
+      dns-filter:
+        condition: service_healthy
+      egress-proxy:
+        condition: service_healthy
+      broker:
+        condition: service_healthy

@@ -44,6 +44,7 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0030](0030-real-llm-smoke-manual-trigger.md) | Real-LLM smoke as manual-trigger CI job | `smoke:llm-real` runs `claude -p` against the just-built image ; operator clicks to trigger after setting the protected API key variable |
 | [0031](0031-principal-validate-cli.md) | `secured-claude principal validate` lint CLI | Catches YAML typos (role / atributes / wrong types) before runtime ; exit 1 on issues for pre-commit / CI gating |
 | [0032](0032-auto-anchor-cron-templates.md) | Auto-anchor cron templates (launchd / systemd) | Daily `audit-anchor` cron + retention prune + optional external-sync hook ; ship hardened service unit |
+| [0033](0033-broker-containerised-for-ci-smoke.md) | Broker containerised for CI full-stack smoke | Dockerfile.broker + docker-compose.ci.yml override ; production stays host-side per ADR-0006 |
 
 ### Operational envelope (where the code lives, how it's shipped)
 

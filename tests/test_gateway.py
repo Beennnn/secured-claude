@@ -122,7 +122,16 @@ def test_map_unknown_tool_falls_back() -> None:
 
 def test_default_principal_uses_minimal_attrs(tmp_path: Path) -> None:
     """The default principal_id maps to roles=[agent], trust_level=0."""
-    client, _store, cerbos = _make_app(tmp_path, allow=True)
+    # Inject a minimal directory ; default principal is [agent, claude_agent]
+    # since Cerbos's parentRoles requires the derived role explicit in the
+    # principal's role list (see config/principals.yaml comment + ADR-0033).
+    principals = {
+        "claude-code-default": {
+            "roles": ["agent", "claude_agent"],
+            "attributes": {"trust_level": 0},
+        },
+    }
+    client, _store, cerbos = _make_app(tmp_path, allow=True, principals=principals)
     client.post(
         "/check",
         json={
@@ -133,7 +142,7 @@ def test_default_principal_uses_minimal_attrs(tmp_path: Path) -> None:
         },
     )
     call = cerbos.check.call_args
-    assert call.kwargs["principal_roles"] == ["agent"]
+    assert call.kwargs["principal_roles"] == ["agent", "claude_agent"]
     assert call.kwargs["principal_attr"] == {"trust_level": 0}
 
 
@@ -184,10 +193,13 @@ def test_audit_only_principal_passes_scope(tmp_path: Path) -> None:
 
 def test_unknown_principal_falls_back_to_default_attrs(tmp_path: Path) -> None:
     """A principal_id not in the directory still gets a check (fail-open is
-    safe : the resulting roles=[agent] + trust_level=0 are minimal, and the
-    Cerbos policies still gate every action)."""
+    safe : the resulting roles=[agent, claude_agent] + trust_level=0 are
+    minimal, and the Cerbos policies still gate every action)."""
     principals = {
-        "claude-code-default": {"roles": ["agent"], "attributes": {"trust_level": 0}},
+        "claude-code-default": {
+            "roles": ["agent", "claude_agent"],
+            "attributes": {"trust_level": 0},
+        },
     }
     client, _store, cerbos = _make_app(tmp_path, allow=True, principals=principals)
     client.post(
@@ -203,7 +215,7 @@ def test_unknown_principal_falls_back_to_default_attrs(tmp_path: Path) -> None:
     # Roles + attrs come from the default fallback ; principal_id is preserved
     # in the audit log so the unknown principal is still traceable.
     assert call.kwargs["principal_id"] == "some-unknown-principal"
-    assert call.kwargs["principal_roles"] == ["agent"]
+    assert call.kwargs["principal_roles"] == ["agent", "claude_agent"]
     assert call.kwargs["principal_attr"] == {"trust_level": 0}
 
 
@@ -249,7 +261,15 @@ def test_load_principals_missing_top_key_returns_default(tmp_path: Path) -> None
     p = tmp_path / "no-key.yaml"
     p.write_text("other_section:\n  foo: bar\n", encoding="utf-8")
     out = load_principals(p)
-    assert out == {"claude-code-default": {"roles": ["agent"], "attributes": {"trust_level": 0}}}
+    # Default principal includes claude_agent because Cerbos's parentRoles
+    # semantics require the derived role explicit in principal.roles.
+    expected = {
+        "claude-code-default": {
+            "roles": ["agent", "claude_agent"],
+            "attributes": {"trust_level": 0},
+        }
+    }
+    assert out == expected
 
 
 def test_load_principals_skips_invalid_entries(tmp_path: Path) -> None:

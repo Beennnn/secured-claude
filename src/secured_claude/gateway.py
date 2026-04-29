@@ -28,7 +28,12 @@ log = logging.getLogger(__name__)
 # (or pass principal_id="claude-code-default") get this exact behaviour.
 _DEFAULT_PRINCIPAL_ID = "claude-code-default"
 _DEFAULT_PRINCIPAL: dict[str, Any] = {
-    "roles": ["agent"],
+    # Both `agent` and `claude_agent` — Cerbos's parentRoles in
+    # derived_roles.yaml requires the derived role to be explicitly
+    # listed in the principal's roles. derived_roles still gates the
+    # `trusted_agent` (trust_level >= 1) and `auditor` (scope == "audit-only")
+    # roles via attribute conditions.
+    "roles": ["agent", "claude_agent"],
     "attributes": {"trust_level": 0},
 }
 
