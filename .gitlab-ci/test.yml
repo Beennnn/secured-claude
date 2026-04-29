@@ -1,15 +1,28 @@
 ---
 # Test stage — pytest matrix on supported Python versions, coverage gate ≥ 90%.
 
+# Reusable Python+uv setup. Each test job overrides the image tag.
+.uv-test:
+  stage: test
+  cache:
+    - key:
+        files: [uv.lock]
+      paths: [.venv/, .uv-cache/]
+      policy: pull-push
+    - key: incremental-${CI_COMMIT_REF_SLUG}
+      paths: [.pytest_cache/, .mypy_cache/, .ruff_cache/]
+      policy: pull-push
+  before_script:
+    - uv sync --all-extras --frozen
+
 # ---------------------------------------------------------------------------
-# Unit tests on Python 3.13 (current default)
+# Default Python (3.13) — runs on every pipeline
 # ---------------------------------------------------------------------------
 
 test:py313:
-  stage: test
-  extends: .cache-uv-incremental
+  extends: .uv-test
+  image: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
   script:
-    - uv sync --all-extras --python 3.13
     - uv run pytest tests/ --cov=src/secured_claude --cov-report=xml --cov-report=term -m "not audit"
   coverage: '/^TOTAL.+?(\d+\.?\d*\%)/'
   artifacts:
@@ -18,19 +31,17 @@ test:py313:
       coverage_report:
         coverage_format: cobertura
         path: coverage.xml
-    paths:
-      - coverage.xml
+    paths: [coverage.xml]
     expire_in: 30 days
 
 # ---------------------------------------------------------------------------
-# Compat matrix — Python 3.11 + 3.12 to verify supported floor versions
+# Compat matrix — Python 3.11 + 3.12 — only on MR / main / tags
 # ---------------------------------------------------------------------------
 
 test:py311:
-  stage: test
-  extends: .cache-uv-incremental
+  extends: .uv-test
+  image: ghcr.io/astral-sh/uv:python3.11-bookworm-slim
   script:
-    - uv sync --all-extras --python 3.11
     - uv run pytest tests/ -m "not audit" -q
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -38,10 +49,9 @@ test:py311:
     - if: $CI_COMMIT_TAG
 
 test:py312:
-  stage: test
-  extends: .cache-uv-incremental
+  extends: .uv-test
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
   script:
-    - uv sync --all-extras --python 3.12
     - uv run pytest tests/ -m "not audit" -q
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
