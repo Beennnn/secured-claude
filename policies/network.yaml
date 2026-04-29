@@ -1,0 +1,104 @@
+---
+# Network access policy — gates WebFetch / WebSearch tool calls.
+#
+# Posture (per ADR-0003 default-deny for network):
+# - ALLOW only fetches to host names in the allowlist
+# - DENY explicit list of internal / local / link-local / cloud-metadata IPs
+# - DENY by default (anything not in the allowlist)
+#
+# Resource attributes the broker provides:
+# - request.resource.attr.host — hostname (already lowercased, IDNA decoded)
+# - request.resource.attr.scheme — "http" | "https"
+# - request.resource.attr.port — int
+# - request.resource.attr.method — "GET" | "POST" | "HEAD" | …
+# - request.resource.attr.url_full — complete URL string (audit)
+#
+# Threat model AT-4 (network exfil), R-DNS-LEAK.
+# OWASP A10 SSRF mitigation.
+
+apiVersion: api.cerbos.dev/v1
+
+resourcePolicy:
+  resource: url
+  version: default
+  importDerivedRoles:
+    - common_roles
+
+  rules:
+
+    # ──────────────────────────────────────────────────────────────────
+    # DENY : SSRF target patterns (override allow)
+    # ──────────────────────────────────────────────────────────────────
+    - actions: ["fetch"]
+      effect: EFFECT_DENY
+      roles: ["claude_agent"]
+      condition:
+        match:
+          any:
+            of:
+              # Localhost / loopback
+              - expr: request.resource.attr.host == "localhost"
+              - expr: request.resource.attr.host == "127.0.0.1"
+              - expr: request.resource.attr.host == "::1"
+              - expr: request.resource.attr.host == "0.0.0.0"
+
+              # IPv4 private RFC 1918
+              - expr: request.resource.attr.host.matches("^10\\..*")
+              - expr: request.resource.attr.host.matches("^192\\.168\\..*")
+              - expr: request.resource.attr.host.matches("^172\\.(1[6-9]|2[0-9]|3[0-1])\\..*")
+
+              # Link-local
+              - expr: request.resource.attr.host.matches("^169\\.254\\..*")
+              - expr: request.resource.attr.host.matches("^fe80:.*")
+
+              # Cloud metadata services (AWS / GCP / Azure / DO)
+              - expr: request.resource.attr.host == "169.254.169.254"
+              - expr: request.resource.attr.host == "metadata.google.internal"
+              - expr: request.resource.attr.host == "100.100.100.200"
+
+              # Plaintext HTTP for sensitive operations (must be HTTPS)
+              - expr: |
+                  request.resource.attr.scheme == "http" &&
+                  !(request.resource.attr.host in ["localhost", "host.docker.internal"])
+
+              # Multicast / broadcast / reserved
+              - expr: request.resource.attr.host.matches("^(224|225|226|227|228|229|230|231|232|233|234|235|236|237|238|239)\\..*")
+              - expr: request.resource.attr.host == "255.255.255.255"
+
+              # IPv4-mapped IPv6 attempting to evade the IPv4 deny list
+              - expr: request.resource.attr.host.matches("^::ffff:.*")
+
+    # ──────────────────────────────────────────────────────────────────
+    # ALLOW : explicit host allowlist
+    # Add a host here only after security review (PR review + ADR if
+    # introducing a new domain class).
+    # ──────────────────────────────────────────────────────────────────
+    - actions: ["fetch"]
+      effect: EFFECT_ALLOW
+      roles: ["claude_agent"]
+      condition:
+        match:
+          expr: |
+            request.resource.attr.host in [
+              "api.anthropic.com",
+              "console.anthropic.com",
+              "docs.claude.com",
+              "github.com",
+              "raw.githubusercontent.com",
+              "api.github.com",
+              "objects.githubusercontent.com",
+              "codeload.github.com",
+              "gitlab.com",
+              "registry.gitlab.com",
+              "registry.npmjs.org",
+              "npmjs.org",
+              "www.npmjs.com",
+              "pypi.org",
+              "files.pythonhosted.org",
+              "registry-1.docker.io",
+              "auth.docker.io",
+              "production.cloudflare.docker.com",
+              "ghcr.io",
+              "registry.k8s.io",
+              "host.docker.internal"
+            ]

@@ -1,0 +1,69 @@
+---
+# MCP tool invocation policy — gates `mcp__<server>__<tool>` calls.
+#
+# Posture (per ADR-0003 default-deny for MCP):
+# - DENY by default — every MCP server must be explicitly allowlisted
+# - ALLOW only servers whose `server` name AND `tool` name pair appear
+#   in the allowlist below
+#
+# Resource attributes the broker provides:
+# - request.resource.attr.server — the MCP server identifier (e.g. "mirador-java")
+# - request.resource.attr.tool — the tool name (e.g. "get_health")
+# - request.resource.attr.input — JSON of the tool input (for argument-level review)
+#
+# Threat model AT R5 (MCP abuse). EU AI Act Art. 14 (human oversight) is
+# satisfied by requiring explicit human review for each MCP server addition.
+
+apiVersion: api.cerbos.dev/v1
+
+resourcePolicy:
+  resource: mcp_tool
+  version: default
+  importDerivedRoles:
+    - common_roles
+
+  rules:
+
+    # ──────────────────────────────────────────────────────────────────
+    # ALLOW : allowlisted MCP server + tool pairs
+    #
+    # v0.1 ships with NO allowlisted MCPs by default. Operators must
+    # explicitly add the servers they trust here, paired with the tools
+    # they want to expose. This forces a deliberate decision per server.
+    #
+    # Example (uncomment to enable mirador-java MCP read-only operations):
+    #
+    # - actions: ["invoke"]
+    #   effect: EFFECT_ALLOW
+    #   roles: ["claude_agent"]
+    #   condition:
+    #     match:
+    #       all:
+    #         of:
+    #           - expr: request.resource.attr.server == "mirador-java"
+    #           - expr: |
+    #               request.resource.attr.tool in [
+    #                 "get_health",
+    #                 "get_metrics",
+    #                 "list_recent_orders",
+    #                 "get_customer_360"
+    #               ]
+    # ──────────────────────────────────────────────────────────────────
+
+    # No-op rule kept here so the policy compiles even with zero MCP
+    # servers allowlisted. The policy default below is DENY so every
+    # un-allowlisted MCP call is rejected.
+    - actions: ["invoke"]
+      effect: EFFECT_DENY
+      roles: ["claude_agent"]
+      condition:
+        match:
+          # Belt-and-braces : DENY any server matching attacker-style
+          # patterns even if mistakenly added to an allowlist.
+          any:
+            of:
+              - expr: request.resource.attr.server.matches("(?i).*evil.*")
+              - expr: request.resource.attr.server.matches("(?i).*attacker.*")
+              - expr: request.resource.attr.tool.matches("(?i).*execute_arbitrary.*")
+              - expr: request.resource.attr.tool.matches("(?i).*shell.*")
+              - expr: request.resource.attr.tool.matches("(?i).*eval.*")
