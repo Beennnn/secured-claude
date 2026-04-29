@@ -143,6 +143,51 @@ Full honest limits in [`SECURITY.md` §"Out-of-scope"](SECURITY.md#out-of-scope-
 
 ---
 
+## Verify the artifacts (no clone needed — ADR-0023)
+
+Every released `vX.Y.Z` carries 6 asset links on its [GitLab Release page](https://gitlab.com/benoit.besson/secured-claude/-/releases). Skip the source ; download the proof :
+
+```bash
+TAG=v0.2.1   # or whichever tag you want to audit
+BASE=https://gitlab.com/benoit.besson/secured-claude
+
+# 1. SBOM (SPDX 2.3) — what's in the image
+curl -fsSL "$BASE/-/jobs/artifacts/$TAG/raw/sbom.spdx.json?job=security:sbom" \
+  -o sbom-$TAG.spdx.json
+# Sanity check : file is not 4xx HTML, has packages
+jq '.packages | length' sbom-$TAG.spdx.json   # should print > 0
+
+# 2. CVE scan (Trivy filesystem) — was it CVE-clean at release time
+curl -fsSL "$BASE/-/jobs/artifacts/$TAG/raw/trivy.json?job=security:trivy" \
+  -o trivy-$TAG.json
+jq '.Results[].Vulnerabilities | length' trivy-$TAG.json   # 0 = clean
+
+# 3. CVE cross-check (Grype) — independent verification of #2
+curl -fsSL "$BASE/-/jobs/artifacts/$TAG/raw/grype.json?job=security:grype" \
+  -o grype-$TAG.json
+
+# 4. Secret scan (Gitleaks) — did the release accidentally commit a secret
+curl -fsSL "$BASE/-/jobs/artifacts/$TAG/raw/gitleaks.json?job=security:gitleaks" \
+  -o gitleaks-$TAG.json
+jq 'length' gitleaks-$TAG.json   # 0 = no leaks
+
+# 5. Coverage XML — `cat coverage-$TAG.xml | xmllint --xpath ...` to read percentage
+curl -fsSL "$BASE/-/jobs/artifacts/$TAG/raw/coverage.xml?job=test:py313" \
+  -o coverage-$TAG.xml
+
+# 6. Image signature — verify cosign keyless OIDC (ADR-0016)
+cosign verify \
+  registry.gitlab.com/benoit.besson/secured-claude/claude-code:$TAG \
+  --certificate-identity-regexp '^https://gitlab.com/benoit.besson/secured-claude' \
+  --certificate-oidc-issuer https://gitlab.com
+```
+
+**No clone required.** The links resolve to immutable CI artifacts with 1-year retention. Recipients get the same bytes you'd see at release time. Tag annotations (`git show $TAG`) carry the full verification log including pipeline IDs and local test pass — `gh release view` / `glab release view` surface the same.
+
+What this defends against : "you say you have 92 % coverage but I can't verify" → here's the coverage XML. "You say there are 0 CVEs but maybe a recent CVE landed and you didn't rescan" → re-run grype against the `sbom-$TAG.spdx.json` today. "You say the image is signed but how do I know" → cosign verify, with no clone.
+
+---
+
 ## Why secured-claude
 
 Claude Code is the most ergonomic agentic CLI today — but for **enterprise adoption** you need :

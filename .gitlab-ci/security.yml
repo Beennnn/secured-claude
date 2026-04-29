@@ -55,7 +55,9 @@ security:gitleaks:
   artifacts:
     when: always
     paths: [gitleaks.json]
-    expire_in: 30 days
+    # 1-year retention so the GitLab Release asset link (ADR-0023)
+    # stays valid for compliance / audit recipients.
+    expire_in: 1 year
 
 # ---------------------------------------------------------------------------
 # Filesystem multi-faceted scan (trivy)
@@ -83,7 +85,8 @@ security:trivy:
   artifacts:
     when: always
     paths: [trivy.json]
-    expire_in: 30 days
+    # 1-year retention so the GitLab Release asset link (ADR-0023) stays valid.
+    expire_in: 1 year
 
 # ---------------------------------------------------------------------------
 # Dep CVE cross-check (grype)
@@ -115,7 +118,8 @@ security:grype:
   artifacts:
     when: always
     paths: [grype.json]
-    expire_in: 30 days
+    # 1-year retention so the GitLab Release asset link (ADR-0023) stays valid.
+    expire_in: 1 year
 
 # ---------------------------------------------------------------------------
 # SBOM (SPDX) — published as release artifact (ADR-0016)

@@ -46,6 +46,7 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0016](0016-supply-chain-cosign-sbom.md) | Supply-chain provenance — cosign keyless OIDC + Syft SBOM | Signed images, SPDX SBOM ; OWASP A08 covered |
 | [0018](0018-hatch-vcs-version-from-git-tag.md) | Package version derived from git tag (hatch-vcs) | Each tag → unique wheel filename ; replaces v0.1.x publish:pypi shell-wrap shim |
 | [0021](0021-pin-claude-code-npm-version.md) | Pin Claude Code npm version + Renovate auto-bump | Closes the @latest hole in ADR-0008 ; Renovate auto-PRs the bumps ; bin/update-claude-code.sh for ad-hoc |
+| [0023](0023-release-asset-links-verifiable-from-outside.md) | Release asset links (every claim verifiable from outside) | 6 asset-links on every Release ; recipient can curl + jq sbom/trivy/grype/gitleaks/coverage/cosign without cloning |
 
 ## Reading order suggestion
 

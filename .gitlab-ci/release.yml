@@ -12,7 +12,14 @@ release:gitlab:
   image: alpine:latest
   rules:
     - if: $CI_COMMIT_TAG
-  needs: [publish:pypi, publish:cosign-sign, security:sbom]
+  needs:
+    - publish:pypi
+    - publish:cosign-sign
+    - security:sbom
+    - security:trivy
+    - security:grype
+    - security:gitleaks
+    - test:py313
   script:
     - |
       cat <<EOF > release-description.md
@@ -57,17 +64,40 @@ release:gitlab:
       ADR-0017 details the pipeline. SECURITY.md describes the threat model.
       EOF
     - apk add --no-cache curl jq
-    # POST to /projects/:id/releases with the description as JSON body.
+    # POST to /projects/:id/releases with the description + asset links
+    # as JSON body. The asset links point to job artifacts (1-year retention
+    # — see security.yml + test.yml expire_in) so a reviewer downloading
+    # the release can verify every claim offline (ADR-0023).
     # CI_JOB_TOKEN works for the Releases API on a tag pipeline.
     # If the release already exists (re-run on the same tag), the API
     # returns 409 Conflict ; we treat it as success for idempotency.
     - |
+      # Asset link URL pattern : ${CI_PROJECT_URL}/-/jobs/artifacts/<ref>/raw/<path>?job=<job_name>
+      # This resolves to the latest matching job's artifact for the given ref ;
+      # stays valid as long as the artifact's expire_in window holds.
+      ART_BASE="${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw"
+      ASSETS_JSON=$(jq -n \
+        --arg sbom "${ART_BASE}/sbom.spdx.json?job=security:sbom" \
+        --arg trivy "${ART_BASE}/trivy.json?job=security:trivy" \
+        --arg grype "${ART_BASE}/grype.json?job=security:grype" \
+        --arg gitleaks "${ART_BASE}/gitleaks.json?job=security:gitleaks" \
+        --arg coverage "${ART_BASE}/coverage.xml?job=test:py313" \
+        --arg image "https://${CI_REGISTRY}/${CI_PROJECT_PATH}/claude-code:${CI_COMMIT_TAG}" \
+        '{links: [
+          {name: "SBOM (SPDX 2.3)",     url: $sbom,     link_type: "package"},
+          {name: "Trivy scan (JSON)",   url: $trivy,    link_type: "other"},
+          {name: "Grype scan (JSON)",   url: $grype,    link_type: "other"},
+          {name: "Gitleaks scan (JSON)",url: $gitleaks, link_type: "other"},
+          {name: "Coverage XML",        url: $coverage, link_type: "other"},
+          {name: "Container image",     url: $image,    link_type: "image"}
+        ]}')
       desc=$(cat release-description.md)
       payload=$(jq -n \
         --arg name "secured-claude ${CI_COMMIT_TAG}" \
         --arg tag "${CI_COMMIT_TAG}" \
         --arg desc "$desc" \
-        '{name: $name, tag_name: $tag, description: $desc}')
+        --argjson assets "$ASSETS_JSON" \
+        '{name: $name, tag_name: $tag, description: $desc, assets: $assets}')
       http_code=$(curl -sS -o /tmp/resp.json -w "%{http_code}" \
         -X POST \
         -H "JOB-TOKEN: ${CI_JOB_TOKEN}" \
@@ -77,7 +107,7 @@ release:gitlab:
       echo "POST /releases → HTTP $http_code"
       cat /tmp/resp.json | head -100
       case "$http_code" in
-        201) echo "✓ Release ${CI_COMMIT_TAG} created" ;;
+        201) echo "✓ Release ${CI_COMMIT_TAG} created (with 6 asset links)" ;;
         409) echo "✓ Release ${CI_COMMIT_TAG} already exists (idempotent re-run)" ;;
         *)   echo "✗ unexpected HTTP $http_code"; exit 1 ;;
       esac
