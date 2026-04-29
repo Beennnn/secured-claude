@@ -44,10 +44,10 @@ COPY docker/settings.template.json /etc/secured-claude/settings.template.json
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod 0755 /entrypoint.sh
 
-# Run as non-root (ADR-0005, L4 hardening). UID/GID 1000 is the conventional
+# Run as non-root (ADR-0005, L4 hardening). UID/GID 1001 is the conventional
 # first user on Debian-derived images.
-RUN groupadd -g 1000 agent \
- && useradd -m -u 1000 -g 1000 -s /bin/bash agent \
+RUN groupadd -g 1001 agent \
+ && useradd -m -u 1001 -g 1001 -s /bin/bash agent \
  && mkdir -p /workspace /home/agent/.claude/projects \
  && chown -R agent:agent /workspace /home/agent
 USER agent
