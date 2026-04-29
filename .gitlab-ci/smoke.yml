@@ -27,6 +27,11 @@ smoke:runtime:
     - build:image
     - build:image:dns-filter
     - build:image:egress-proxy
+    # On tag pipelines, the manifest combiner overwrites :${SHA} with the
+    # multi-arch index ; smoke must wait for it. On main pipelines, the
+    # combiner doesn't run (rules: tag-only) so this need is no-op.
+    - job: build:image:manifest
+      optional: true
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
   script:
