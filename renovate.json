@@ -1,0 +1,66 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    "group:allNonMajor"
+  ],
+  "labels": ["dependencies"],
+  "schedule": ["before 6am on monday"],
+  "timezone": "Europe/Paris",
+  "rangeStrategy": "pin",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^Dockerfile\\.claude-code$/"],
+      "matchStrings": [
+        "ARG CLAUDE_CODE_VERSION=(?<currentValue>[0-9][^\\s]*)"
+      ],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "@anthropic-ai/claude-code"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^docker-compose\\.yml$/"],
+      "matchStrings": [
+        "apk add --no-cache dnsmasq=(?<currentValue>[0-9][^\\s>]+)",
+        "apk add --no-cache tinyproxy=(?<currentValue>[0-9][^\\s>]+)"
+      ],
+      "datasourceTemplate": "repology",
+      "depNameTemplate": "alpine_3_20/dnsmasq",
+      "versioningTemplate": "loose"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Group all Claude Code bumps as their own PR — auditable in isolation",
+      "matchPackageNames": ["@anthropic-ai/claude-code"],
+      "labels": ["dependencies", "claude-code-bump"],
+      "groupName": "Claude Code CLI",
+      "schedule": ["at any time"],
+      "automerge": false
+    },
+    {
+      "description": "Group docker base image digest bumps separately from app deps",
+      "matchManagers": ["dockerfile"],
+      "groupName": "Docker base images",
+      "labels": ["dependencies", "docker-base"]
+    },
+    {
+      "description": "Cerbos bumps need policy schema review — never auto-merge",
+      "matchPackageNames": ["cerbos/cerbos"],
+      "labels": ["dependencies", "cerbos-bump", "review-required"],
+      "automerge": false
+    }
+  ],
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/.venv/**",
+    "tests/**"
+  ]
+}
