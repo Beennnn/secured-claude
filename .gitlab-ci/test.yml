@@ -13,6 +13,9 @@
       paths: [.pytest_cache/, .mypy_cache/, .ruff_cache/]
       policy: pull-push
   before_script:
+    # hatch-vcs (ADR-0018) needs git in the slim base.
+    - apt-get update -qq && apt-get install -y --no-install-recommends git
+    - git fetch --tags --depth=100 || true
     - uv sync --all-extras --frozen
 
 # ---------------------------------------------------------------------------
