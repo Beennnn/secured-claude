@@ -44,6 +44,7 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0015](0015-distribution-pipx-gitlab-registry.md) | Distribution via pipx + GitLab Package Registry | One-command cross-OS install ; no MSI / pkg / snap over-engineering |
 | [0016](0016-supply-chain-cosign-sbom.md) | Supply-chain provenance — cosign keyless OIDC + Syft SBOM | Signed images, SPDX SBOM ; OWASP A08 covered |
 | [0018](0018-hatch-vcs-version-from-git-tag.md) | Package version derived from git tag (hatch-vcs) | Each tag → unique wheel filename ; replaces v0.1.x publish:pypi shell-wrap shim |
+| [0021](0021-pin-claude-code-npm-version.md) | Pin Claude Code npm version + Renovate auto-bump | Closes the @latest hole in ADR-0008 ; Renovate auto-PRs the bumps ; bin/update-claude-code.sh for ad-hoc |
 
 ## Reading order suggestion
 

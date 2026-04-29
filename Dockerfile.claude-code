@@ -35,9 +35,12 @@ RUN apt-get update \
 RUN pip3 install --no-cache-dir --break-system-packages requests==2.32.5
 
 # ── Layer 3 (rare) : Claude Code CLI ───────────────────────────────────────
-# Pinned to a major version that we've audited. Renovate bumps regularly ;
-# the rebuild is fast because layers 1+2 above are cached.
-RUN npm install -g --no-audit --no-fund @anthropic-ai/claude-code@latest \
+# Pinned to a specific version (no `@latest` floating tag) per CLAUDE.md +
+# ADR-0008. Renovate's customManagers (renovate.json) auto-PRs the bump
+# every time Anthropic publishes a new @anthropic-ai/claude-code release.
+# `bin/update-claude-code.sh` scripts the bump for impatient bumps.
+ARG CLAUDE_CODE_VERSION=2.1.123
+RUN npm install -g --no-audit --no-fund "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm cache clean --force
 
 # ── Layer 4 (rare) : non-root user + write paths ───────────────────────────
