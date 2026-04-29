@@ -19,17 +19,20 @@ For the well-known machine-readable contact file see [`.well-known/security.txt`
 
 **Target architecture** : every tool invocation by the agent traverses **four orthogonal controls**, designed so each is independently sufficient to block its threat class. Compromising one layer does not compromise the system.
 
-| Layer | Mechanism | Threats mitigated | v0.1 status |
+| Layer | Mechanism | Threats mitigated | v0.2 status |
 |---|---|---|---|
 | **L1 — Application** | PreToolUse hook → Cerbos PDP `CheckResources` → `permissionDecision` | Tool intent abuse (Read sensitive paths, dangerous Bash, MCP exploitation, etc.) | **Enforced + tested** (`bin/security-audit.sh` 26/26) |
-| **L2 — Network** | Docker network egress allowlist (`api.anthropic.com`, broker only) | Data exfiltration via syscall-level network calls inside an approved Bash command | **Designed in ADR-0010, NOT enforced** — `secured-claude-net` bridge allows all egress in v0.1 ; sidecar proxy v0.2 |
-| **L3 — Filesystem** | Container `/workspace` mount only, host FS invisible | Lateral access to credentials (`~/.ssh`, `~/.aws`, `.env`), arbitrary host writes | **Enforced** ; v0.1 has no explicit test (relies on Docker's mount semantics) |
-| **L4 — Container hardening** | Non-root UID, read-only root FS, `cap-drop=ALL`, default seccomp profile, cgroup limits | Kernel-side escalation, privilege abuse | **Enforced** as of v0.1.2 (read-only rootfs flipped from `false` to `true` with explicit tmpfs for `/tmp`/`/run`/`.cache`) |
+| **L2 — Network egress** | tinyproxy sidecar with `FilterDefaultDeny` ; CONNECT to non-allowlisted host returns 403 ([ADR-0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md)) | Data exfiltration via syscall-level network calls inside an approved Bash command | **Enforced + tested** — `curl -x http://172.30.42.4:3128 https://evil.com` returns `CONNECT tunnel failed, response 403` |
+| **L2 — DNS allowlist** | dnsmasq sidecar with `no-resolv` ; agent's resolver returns SERVFAIL/REFUSED for non-allowlisted hostnames ([ADR-0020](docs/adr/0020-l3-dns-allowlist-dnsmasq.md)) | DNS tunneling / DNS exfiltration via TXT or A queries to attacker-controlled DNS | **Enforced + tested** — `nslookup evil.com 172.30.42.3` returns REFUSED |
+| **L3 — Filesystem** | Container `/workspace` mount only, host FS invisible | Lateral access to credentials (`~/.ssh`, `~/.aws`, `.env`), arbitrary host writes | **Enforced** ; no explicit test (relies on Docker's mount semantics) |
+| **L4 — Container hardening** | Non-root UID, read-only root FS (agent), `cap-drop=ALL`, default seccomp profile, cgroup limits | Kernel-side escalation, privilege abuse | **Enforced** for the agent ; sidecars are not `read_only` (apk-install pattern) — trade-off documented in [ADR-0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md) |
 
-So v0.1 is **L1-load-bearing, with L3/L4 supporting**. L2 is the gap
-that closes in v0.2 — the README's `What is configured but NOT yet
-enforced` table calls this out explicitly. A senior reviewer should
-read both before trusting "secured by design" outright.
+So v0.2 holds **L1 + L2 (HTTP egress) + L2-DNS + partial L3/L4**.
+The "4 independent layers, each independently sufficient" framing in
+[ADR-0012](docs/adr/0012-defense-in-depth-layers.md) is now realised
+end-to-end for agent egress (L1 Cerbos + L2 tinyproxy + L2-DNS dnsmasq
+form a triple allowlist). The remaining v0.3 gaps are documented in
+the README's `What is configured but NOT yet enforced` table.
 
 Full mapping of each threat to defending layers : [`docs/security/threat-model.md`](docs/security/threat-model.md).
 

@@ -1,16 +1,20 @@
 ---
 # secured-claude compose file.
 #
-# Two services :
-#   - cerbos       — Policy Decision Point (ADR-0001)
-#   - claude-code  — Claude Code CLI inside a hardened container (ADR-0005)
+# Four services :
+#   - cerbos        — Policy Decision Point (ADR-0001)
+#   - dns-filter    — DNS allowlist sidecar (ADR-0020 / R-DNS-LEAK closed in v0.2)
+#   - egress-proxy  — L2 HTTP egress allowlist (ADR-0019 / closes the design-only L2 gap)
+#   - claude-code   — Claude Code CLI inside a hardened container (ADR-0005)
 #
 # The host-side broker (Python FastAPI) runs OUTSIDE compose — it's the
 # component that orchestrates this very file (ADR-0006).
 #
-# Network : `secured-claude-net` is a custom bridge with `extra_hosts` so the
-# claude-code container can reach the host broker via `host.docker.internal`
-# on Linux too (Mac/Win get this natively from Docker Desktop) — ADR-0007.
+# Network : `secured-claude-net` is a custom bridge with a /29 subnet
+# (172.30.42.0/29 — 6 usable host IPs) so each service has a stable
+# static IP. The agent's HTTPS_PROXY and dns: directives reference these
+# fixed IPs ; without static IPs, docker-compose service names would
+# require DNS resolution that the dns-filter would block.
 #
 # Pinning : every image is digest-pinned per ADR-0008. Renovate keeps these
 # fresh.
@@ -41,12 +45,112 @@ services:
       - server
       - --config=/etc/cerbos/config.yaml
     networks:
-      - secured-claude-net
+      secured-claude-net:
+        ipv4_address: 172.30.42.2
     healthcheck:
       test: ["CMD", "/cerbos", "healthcheck", "--insecure"]
       interval: 10s
       timeout: 3s
       retries: 5
+
+  dns-filter:
+    # ADR-0020 — DNS allowlist sidecar. dnsmasq in forwarder mode with
+    # `no-resolv` : the agent's queries get SERVFAIL for everything except
+    # *.anthropic.com (forwarded to public 1.1.1.1 / 8.8.8.8).
+    #
+    # alpine:3.20 + apk install dnsmasq at start. Could be a custom
+    # image, but the apk install at boot is ~3 s and keeps the supply
+    # chain to one base image.
+    image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+    container_name: secured-claude-dns
+    restart: unless-stopped
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add:
+      # dnsmasq binds port 53 — privileged port. CHOWN/SETUID/SETGID
+      # are needed for apk install. NET_BIND_SERVICE for the bind itself.
+      - CHOWN
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    # NOTE: read_only:true would be the L4-hardened pattern, but apk
+    # install at boot requires writable /etc/apk + /usr + /var. Trade-off
+    # accepted for v0.2 : these sidecars are stateless, have cap_drop
+    # ALL minus 4 narrow caps, have no host volumes (only RO config),
+    # and no network egress except to the public DNS / Anthropic API.
+    # v0.3 ticket : pre-build dns-filter / egress-proxy as their own
+    # signed images so we can re-enable read_only.
+    volumes:
+      - ./docker/dnsmasq.conf:/etc/dnsmasq.conf:ro
+    networks:
+      secured-claude-net:
+        ipv4_address: 172.30.42.3
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache dnsmasq=2.90-r3 >/dev/null 2>&1 \
+          && exec dnsmasq -k -C /etc/dnsmasq.conf
+    mem_limit: 64m
+    healthcheck:
+      # Self-check : query an allowed domain via this resolver.
+      # If dnsmasq isn't bound or the rules are wrong, this fails.
+      test:
+        - CMD-SHELL
+        - "nslookup api.anthropic.com 127.0.0.1 >/dev/null 2>&1 || exit 1"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+
+  egress-proxy:
+    # ADR-0019 — L2 HTTP egress allowlist. tinyproxy in CONNECT-only mode
+    # with FilterDefaultDeny : only hosts matching docker/tinyproxy-filter.txt
+    # are tunnelled. CONNECT to anything else returns 403 — the agent's
+    # HTTPS to evil.com is impossible at the network layer.
+    #
+    # alpine + tinyproxy via apk : same rationale as dns-filter (one base
+    # image, ~3 s install at boot, simple supply chain).
+    image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+    container_name: secured-claude-egress
+    restart: unless-stopped
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    # See dns-filter NOTE re read_only — same trade-off applies.
+    volumes:
+      - ./docker/tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
+      - ./docker/tinyproxy-filter.txt:/etc/tinyproxy/filter.txt:ro
+    networks:
+      secured-claude-net:
+        ipv4_address: 172.30.42.4
+    depends_on:
+      dns-filter:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache tinyproxy=1.11.2-r0 >/dev/null 2>&1 \
+          && exec tinyproxy -d -c /etc/tinyproxy/tinyproxy.conf
+    mem_limit: 64m
+    healthcheck:
+      # Self-check : connect locally to port 3128. Don't use the proxy
+      # to verify itself ; that risks circular failure modes.
+      test:
+        - CMD-SHELL
+        - "nc -z 127.0.0.1 3128 || exit 1"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
 
   claude-code:
     build:
@@ -57,6 +161,10 @@ services:
     restart: "no"
     depends_on:
       cerbos:
+        condition: service_healthy
+      dns-filter:
+        condition: service_healthy
+      egress-proxy:
         condition: service_healthy
     user: "1001:1001"
     # L4 hardening : read-only root FS + tmpfs for the few paths that need
@@ -82,14 +190,27 @@ services:
       SECURED_CLAUDE_BROKER: http://host.docker.internal:8765
       SECURED_CLAUDE_PRINCIPAL: ${SECURED_CLAUDE_PRINCIPAL:-claude-code-default}
       TERM: ${TERM:-xterm-256color}
+      # ADR-0019 — force HTTPS through egress-proxy. Static IP rather
+      # than service name because dns-filter (ADR-0020) doesn't resolve
+      # internal Docker service names.
+      HTTPS_PROXY: http://172.30.42.4:3128
+      HTTP_PROXY: http://172.30.42.4:3128
+      # host.docker.internal (gateway) and localhost bypass the proxy —
+      # those are local IPC, not egress.
+      NO_PROXY: host.docker.internal,localhost,127.0.0.1,172.30.42.0/29
     extra_hosts:
       # Linux compatibility for host.docker.internal — Mac/Win have it natively.
       - "host.docker.internal:host-gateway"
+    # ADR-0020 — agent's resolver points exclusively at the dns-filter
+    # sidecar. Docker's default 127.0.0.11 is bypassed.
+    dns:
+      - 172.30.42.3
     volumes:
       - ${SECURED_CLAUDE_WORKSPACE:-./workspace}:/workspace:rw
       - claude-state:/home/agent/.claude
     networks:
-      - secured-claude-net
+      secured-claude-net:
+        ipv4_address: 172.30.42.5
     stdin_open: true
     tty: true
     # Keep the container alive so `secured-claude run` / `exec` can `docker
@@ -107,6 +228,11 @@ networks:
   secured-claude-net:
     driver: bridge
     name: secured-claude-net
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.30.42.0/29
+          gateway: 172.30.42.1
 
 volumes:
   claude-state:
