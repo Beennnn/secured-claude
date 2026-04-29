@@ -1,0 +1,96 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "secured-claude"
+version = "0.1.0"
+description = "Claude Code wrapper, secured by design — every tool call gated by Cerbos, audited in SQLite, deployed in 2 containers."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [
+    { name = "Benoit Besson", email = "benoit.besson@gmail.com" },
+]
+keywords = [
+    "claude",
+    "claude-code",
+    "cerbos",
+    "security",
+    "policy-as-code",
+    "ai-agent",
+    "enterprise",
+    "secure-by-design",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = [
+    "docker>=7.1.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32",
+    "requests>=2.32.0",
+    "pyyaml>=6.0",
+    "rich>=13.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "responses>=0.25",
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "bandit>=1.7",
+    "pip-audit>=2.7",
+]
+
+[project.scripts]
+secured-claude = "secured_claude.cli:main"
+secured-claude-hook = "secured_claude.hook:main"
+
+[project.urls]
+Homepage = "https://gitlab.com/secured-claude/secured-claude"
+Repository = "https://gitlab.com/secured-claude/secured-claude"
+Documentation = "https://gitlab.com/secured-claude/secured-claude/-/blob/main/README.md"
+Issues = "https://gitlab.com/secured-claude/secured-claude/-/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/secured_claude"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "C4", "UP", "S", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S106"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "audit: security audit demonstration tests (slow, require Cerbos container)",
+    "integration: integration tests with real Cerbos",
+]

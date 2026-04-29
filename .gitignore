@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenv / package managers
+.venv/
+venv/
+env/
+
+# Node (the agent container builds locally)
+node_modules/
+npm-debug.log*
+
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets.json
+.anthropic_api_key
+
+# Audit / runtime data (local to user, never in repo)
+audit-reports/
+approvals.db
+approvals.db-journal
+*.sqlite
+*.sqlite-journal
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+
+# Build artifacts
+*.tar
+*.tar.gz
+*.whl
+*.zip
+
+# Docker scratch
+.dockerignore.bak
+
+# Cerbos policy compilation cache
+.cerbos-cache/
