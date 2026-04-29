@@ -116,7 +116,7 @@ def make_app(
         try:
             result: CheckResult = cerbos_client.check(
                 principal_id=req.principal_id,
-                principal_roles=["agent"],
+                principal_roles=["agent", "claude_agent"],
                 principal_attr={"trust_level": 0},
                 resource_kind=kind,
                 resource_id=rid,
@@ -136,7 +136,7 @@ def make_app(
         decision_id = audit_store.insert(
             session_id=req.session_id,
             principal_id=req.principal_id,
-            principal_roles=["agent"],
+            principal_roles=["agent", "claude_agent"],
             resource_kind=kind,
             resource_id=rid,
             action=action,

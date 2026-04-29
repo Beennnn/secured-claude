@@ -23,7 +23,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from secured_claude import __version__, audit, orchestrator
+from secured_claude import __version__, audit, audit_demo, orchestrator
 from secured_claude.store import Store
 
 
@@ -204,6 +204,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 1
 
 
+def _audit_demo_args(a: argparse.Namespace) -> list[str]:
+    """Forward parsed args to audit_demo.main(argv)."""
+    argv: list[str] = ["--cerbos-url", a.cerbos_url]
+    if a.report:
+        argv += ["--report", str(a.report)]
+    if a.json:
+        argv += ["--json"]
+    return argv
+
+
 def cmd_policy_lint(args: argparse.Namespace) -> int:
     """Run `cerbos compile` in a temporary container against the policies dir."""
     docker = shutil.which("docker")
@@ -298,6 +308,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_audit.set_defaults(func=cmd_audit)
 
     sub.add_parser("doctor", help="validate prerequisites").set_defaults(func=cmd_doctor)
+
+    p_demo = sub.add_parser(
+        "audit-demo",
+        help="run the red-team scenario battery against the live policy stack",
+    )
+    p_demo.add_argument("--cerbos-url", default="http://127.0.0.1:3592")
+    p_demo.add_argument("--report", type=Path, help="markdown report path")
+    p_demo.add_argument("--json", action="store_true")
+    p_demo.set_defaults(func=lambda a: audit_demo.main(_audit_demo_args(a)))
 
     p_policy = sub.add_parser("policy", help="policy operations")
     psub = p_policy.add_subparsers(dest="policy_cmd", required=True)
