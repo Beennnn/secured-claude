@@ -35,7 +35,8 @@ test:py313:
         coverage_format: cobertura
         path: coverage.xml
     paths: [coverage.xml]
-    expire_in: 30 days
+    # 1-year retention so the GitLab Release asset link (ADR-0023) stays valid.
+    expire_in: 1 year
 
 # ---------------------------------------------------------------------------
 # Compat matrix — Python 3.11 + 3.12 — only on MR / main / tags

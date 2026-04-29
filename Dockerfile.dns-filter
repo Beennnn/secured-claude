@@ -1,0 +1,25 @@
+# syntax=docker/dockerfile:1.7
+# Pre-built dns-filter sidecar — replaces the apk-install-at-boot pattern
+# (ADR-0020 v0.2 stop-gap) so the runtime container can be `read_only: true`
+# again. Built by .gitlab-ci/build.yml::build:image:dns-filter via Kaniko,
+# signed by publish:cosign-sign-dns-filter, attached SBOM via security:sbom-dns-filter.
+#
+# Pinned by digest per ADR-0008 ; Renovate's customManagers regex tracks the
+# alpine pin in renovate.json.
+
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+
+# Single layer : install dnsmasq, drop the apk cache. Pinned package
+# version matches the docker-compose v0.2 boot-time install we're replacing.
+RUN apk add --no-cache dnsmasq=2.90-r3
+
+# Run as the unprivileged `nobody` user (uid 65534) — the alpine dnsmasq
+# package creates a `dnsmasq` user (uid 100) but its home is /dev/null which
+# dnsmasq can't write its run-state in. nobody works because we mount tmpfs
+# for /tmp + /var/run in compose. Trivy DS-0002 (Image user should not be
+# 'root') is satisfied. CAP_NET_BIND_SERVICE in compose lets us bind 53.
+USER nobody
+
+# Foreground (-k) so docker-compose sees the process and the healthcheck
+# (nslookup api.anthropic.com 127.0.0.1) gets a live target.
+ENTRYPOINT ["dnsmasq", "-k", "-C", "/etc/dnsmasq.conf"]

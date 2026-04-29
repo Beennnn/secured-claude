@@ -87,10 +87,10 @@ The remaining gaps below are documented ahead of being live.
 
 | Item | v0.2 reality | When it goes live |
 |---|---|---|
-| **Audit log tamper-evidence at FS layer** | App + SQLite trigger refuse `UPDATE`/`DELETE` on `approvals` (tested). But a `rm approvals.db` from another process succeeds — the log is not tamper-EVIDENT, just append-only at the SQL boundary. | v0.3 — hash-chain entries (each row's hash includes previous), optional SIEM JSONL forward |
+| **Audit log tamper-evidence at FS layer** | **v0.3 closes this** ([ADR-0024](docs/adr/0024-hash-chain-audit-log.md)) — SHA-256 chain over each row (`prev_hash`, `row_hash` columns) ; `secured-claude audit-verify` walks the chain and exits non-zero on the first detected break. `rm approvals.db` followed by re-creation is still possible but produces a chain that starts at id=1 with genesis prev_hash next to a recent ts — a forensic smoking gun. External hash anchor (QLDB / blockchain) tracked v0.4+. | Done in v0.3 — `secured-claude audit-verify` |
 | **Multi-principal Cerbos roles** | `derived_roles.yaml` defines them ; broker hardcodes single principal `claude-code-default` | v0.3 |
 | **Runtime smoke in CI** (real claude binary call) | Recipe exists (`secured-claude up && claude -p ...`), runs locally pre-tag ; not yet a CI job | v0.3 — uses a test API key in a GitLab CI variable |
-| **read_only on egress-proxy / dns-filter sidecars** | Trade-off accepted v0.2 : alpine + apk-install at boot pattern needs writable /etc /usr /var. Other L4 hardening (cap_drop ALL, no_new_privileges, mem_limit, no host volumes) still applies. | v0.3 — pre-build dns-filter / egress-proxy as their own signed images |
+| **read_only on egress-proxy / dns-filter sidecars** | **v0.3 closes this** ([ADR-0025](docs/adr/0025-pre-built-sidecar-images.md)) — dedicated `Dockerfile.dns-filter` + `Dockerfile.egress-proxy`, packages baked in, no apk-install-at-boot. `read_only: true` is back ; verified by `docker inspect ... ReadonlyRootfs=true`. Cosign signing of the sidecar images deferred to v0.3.1. | Done in v0.3 (image-level) ; v0.3.1 (cosign-signed) |
 | **Multi-arch image (linux/arm64 native)** | Kaniko `--customPlatform=linux/amd64` produces an amd64-deterministic image regardless of the runner's native arch (arm64 macbook-local in v0.2). amd64 users get a native binary ; arm64 users (Apple Silicon, AWS Graviton) fall back to QEMU emulation under Docker Desktop / containerd `binfmt_misc`. v0.1.8 shipped arm64-only by mistake — this is the v0.2 fix. | v0.3 — true multi-arch manifest list (two parallel Kaniko jobs + `crane index append`) |
 | **Hook coverage of every Claude Code tool** | `matcher: "*"` in PreToolUse hooks every tool we know about (Read/Write/Edit/Bash/WebFetch/WebSearch/MCP/Task). Anthropic adds tools faster than we audit ; **a new tool shipping in a future Claude Code release would default to ALLOW until we map it**. Mitigated by the broker's `unknown_tool` catch-all (kind=`unknown_tool` action=`invoke`) which has no policy rule → DENY by Cerbos default ; verified by `tests/test_gateway.py::test_map_unknown_tool_falls_back`. | Continuous — Renovate bumps Claude Code, audit-demo adds scenarios per new tool |
 
@@ -101,23 +101,31 @@ The remaining gaps below are documented ahead of being live.
 - Physical adversary at the developer machine
 - Compromise of `cerbos/cerbos` upstream image — mitigated by digest pinning ; residual risk acknowledged
 
-### Honest scoring of "defense-in-depth" in v0.2
+### Honest scoring : 1 intent layer + 3 confinement layers (v0.2)
 
-| Layer | Designed | Enforced in v0.2 | Tested in v0.2 |
-|---|---|---|---|
-| **L1 — PreToolUse hook + Cerbos PDP** | Yes | Yes | `bin/security-audit.sh` → 26/26 PASS + runtime smoke transcript |
-| **L2 — Network egress allowlist** | Yes ([ADR-0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md)) | **Yes** — tinyproxy `FilterDefaultDeny` ; CONNECT to non-allowlisted host returns 403 | End-to-end : `curl -x http://172.30.42.4:3128 https://evil.com` → `CONNECT tunnel failed, response 403` (proof in ADR-0019) |
-| **L3 — DNS allowlist** | Yes ([ADR-0020](docs/adr/0020-l3-dns-allowlist-dnsmasq.md)) | **Yes** — dnsmasq `no-resolv` ; `nslookup evil.com` → REFUSED | End-to-end : `nslookup evil.com 172.30.42.3` → `REFUSED` (proof in ADR-0020) |
-| **L3 — Filesystem confinement** | Yes | Yes — only `/workspace` mounted RW from host | Inferred ; no explicit test that `/Users/<me>/.ssh` is unreachable |
-| **L4 — Container hardening** | Yes | Yes for the agent : non-root + cap_drop ALL + seccomp default + read-only rootfs + cgroup `mem_limit: 4g` ; partial for sidecars (read_only deferred — see "configured but NOT yet enforced" above) | Inferred ; no explicit test (`docker inspect` would prove flags are set) |
+Per [ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md) — only L1 understands the agent's intent. L2/L3/L4 are confinement layers that bound the blast radius if L1 is bypassed but don't replace L1's semantic decisions.
 
-Reading : v0.2 holds **L1 + L2 + L3-DNS + partial L3-FS / L4**. The
-"4 independent layers, each independently sufficient" framing in
-[ADR-0012](docs/adr/0012-defense-in-depth-layers.md) is now **enforced
-end-to-end** for the agent's network egress (L1 + L2 + L3-DNS triple
-allowlist). The remaining v0.3 gaps (FS-tamper-evident audit log,
-multi-principal, runtime-smoke-in-CI, read_only on sidecars) are
-documented above.
+| Role | Layer | Designed | Enforced in v0.2 | Tested in v0.2 |
+|---|---|---|---|---|
+| **Intent** | **L1 — PreToolUse hook + Cerbos PDP** ([0001](docs/adr/0001-cerbos-as-policy-decision-point.md), [0002](docs/adr/0002-pretooluse-hook-as-interception-point.md)) | Yes | Yes | `bin/security-audit.sh` → 26/26 PASS + runtime smoke transcript |
+| **Confinement** | **L2 — Network egress allowlist** ([ADR-0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md)) | Yes | **Yes** — tinyproxy `FilterDefaultDeny` ; CONNECT to non-allowlisted host returns 403 | End-to-end : `curl -x http://172.30.42.4:3128 https://evil.com` → `CONNECT tunnel failed, response 403` (proof in ADR-0019) |
+| **Confinement** | **L3 — DNS allowlist** ([ADR-0020](docs/adr/0020-l3-dns-allowlist-dnsmasq.md)) | Yes | **Yes** — dnsmasq `no-resolv` ; `nslookup evil.com` → REFUSED | End-to-end : `nslookup evil.com 172.30.42.3` → `REFUSED` (proof in ADR-0020) |
+| **Confinement** | **L3 — Filesystem confinement** | Yes | Yes — only `/workspace` mounted RW from host | Inferred ; no explicit test that `/Users/<me>/.ssh` is unreachable |
+| **Confinement** | **L4 — Container hardening** | Yes | Yes for the agent : non-root + cap_drop ALL + seccomp default + read-only rootfs + cgroup `mem_limit: 4g` ; sidecars partial (read_only deferred — see "configured but NOT yet enforced" above) | Inferred ; no explicit test (`docker inspect` would prove flags are set) |
+
+Reading : v0.2 holds **L1 (intent) + L2 (egress confinement) + L3 (DNS + FS confinement) + partial L4 (container hardening)**. Per
+[ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md), only L1
+sees the agent's intent — it decides "this Read of `/etc/passwd` is
+denied because the path matches a deny-list pattern." L2/L3/L4 are
+**confinement layers** : they don't understand intent, but they bound
+the blast radius if L1 is bypassed (a compromised Claude Code binary
+can only reach `api.anthropic.com` via L2, can only resolve
+`*.anthropic.com` via L3-DNS, can only read paths mounted into the
+container via L3-FS, and runs without privileges via L4). Compromise
+of L1 is therefore *bounded*, not *catastrophic* — but L2/L3/L4 don't
+*replace* L1's semantic decisions. The remaining v0.3 gaps
+(FS-tamper-evident audit log, multi-principal, runtime-smoke-in-CI,
+read_only on sidecars) are documented above.
 
 Full honest limits in [`SECURITY.md` §"Out-of-scope"](SECURITY.md#out-of-scope-honest-limits) and the residual-risks table in [`docs/security/threat-model.md` §7](docs/security/threat-model.md).
 
@@ -125,13 +133,58 @@ Full honest limits in [`SECURITY.md` §"Out-of-scope"](SECURITY.md#out-of-scope-
 
 > **What this project demonstrates mastery of**
 >
-> - 🔒 **Sécurité** — defense-in-depth 4 couches (PreToolUse hook + Cerbos policy + Docker network egress allowlist + container FS confinement). Each layer is independently sufficient against its threat class.
+> - 🔒 **Sécurité** — defense-in-depth : **1 intent layer + 3 confinement layers** ([ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md)). L1 (PreToolUse hook + Cerbos PDP) is the semantic gate that understands the agent's *intent* and decides on policy. L2 (tinyproxy egress allowlist), L3 (dnsmasq DNS allowlist + workspace-only FS mount), and L4 (cap_drop + read_only + seccomp + cgroups) bound the blast radius if L1 is bypassed.
 > - 🤖 **IA** — Claude Code wrapped in a policy-gated container, every tool call (Read / Write / Edit / Bash / WebFetch / MCP / Task) intercepted via the native PreToolUse hook.
 > - 🏛 **Architecture** — Hexagonal-lite Python broker (host) + Cerbos PDP (container) + Claude Code CLI (container) ; clear trust boundary between intent (LLM) and execution (broker).
 > - ✅ **Qualité** — 16 ADRs covering every security and operational decision ; security audit demonstration with 6 red-team scenarios + 2 happy-paths + policy fuzz + 8 static scans, run on every release.
 > - 🔄 **CI/CD** — GitLab CI 6 stages (lint / test / security / build / publish / release), audit-demo strict gate on releases, cosign keyless signing + Syft SBOM for supply-chain provenance.
 > - ☁️ **Infrastructure** — Cross-platform install (Mac / Linux / Windows) via pipx + GitLab Package Registry ; Docker images pinned by digest ; offline bundle for air-gapped enterprise deploys.
 > - 🛠 **DevX** — `secured-claude` CLI feels like `claude` (TTY preserved) ; `audit` subcommand surfaces the evolving allowlist ; `doctor` validates the install end-to-end.
+
+---
+
+## Verify the artifacts (no clone needed — ADR-0023)
+
+Every released `vX.Y.Z` carries 6 asset links on its [GitLab Release page](https://gitlab.com/benoit.besson/secured-claude/-/releases). Skip the source ; download the proof :
+
+```bash
+TAG=v0.2.1   # or whichever tag you want to audit
+BASE=https://gitlab.com/benoit.besson/secured-claude
+
+# 1. SBOM (SPDX 2.3) — what's in the image
+curl -fsSL "$BASE/-/jobs/artifacts/$TAG/raw/sbom.spdx.json?job=security:sbom" \
+  -o sbom-$TAG.spdx.json
+# Sanity check : file is not 4xx HTML, has packages
+jq '.packages | length' sbom-$TAG.spdx.json   # should print > 0
+
+# 2. CVE scan (Trivy filesystem) — was it CVE-clean at release time
+curl -fsSL "$BASE/-/jobs/artifacts/$TAG/raw/trivy.json?job=security:trivy" \
+  -o trivy-$TAG.json
+jq '.Results[].Vulnerabilities | length' trivy-$TAG.json   # 0 = clean
+
+# 3. CVE cross-check (Grype) — independent verification of #2
+curl -fsSL "$BASE/-/jobs/artifacts/$TAG/raw/grype.json?job=security:grype" \
+  -o grype-$TAG.json
+
+# 4. Secret scan (Gitleaks) — did the release accidentally commit a secret
+curl -fsSL "$BASE/-/jobs/artifacts/$TAG/raw/gitleaks.json?job=security:gitleaks" \
+  -o gitleaks-$TAG.json
+jq 'length' gitleaks-$TAG.json   # 0 = no leaks
+
+# 5. Coverage XML — `cat coverage-$TAG.xml | xmllint --xpath ...` to read percentage
+curl -fsSL "$BASE/-/jobs/artifacts/$TAG/raw/coverage.xml?job=test:py313" \
+  -o coverage-$TAG.xml
+
+# 6. Image signature — verify cosign keyless OIDC (ADR-0016)
+cosign verify \
+  registry.gitlab.com/benoit.besson/secured-claude/claude-code:$TAG \
+  --certificate-identity-regexp '^https://gitlab.com/benoit.besson/secured-claude' \
+  --certificate-oidc-issuer https://gitlab.com
+```
+
+**No clone required.** The links resolve to immutable CI artifacts with 1-year retention. Recipients get the same bytes you'd see at release time. Tag annotations (`git show $TAG`) carry the full verification log including pipeline IDs and local test pass — `gh release view` / `glab release view` surface the same.
+
+What this defends against : "you say you have 92 % coverage but I can't verify" → here's the coverage XML. "You say there are 0 CVEs but maybe a recent CVE landed and you didn't rescan" → re-run grype against the `sbom-$TAG.spdx.json` today. "You say the image is signed but how do I know" → cosign verify, with no clone.
 
 ---
 
@@ -192,16 +245,18 @@ Full design : see [`docs/architecture.md`](docs/architecture.md) and the [16 ADR
 
 ## Architecture decisions
 
-The 16 ADRs in [`docs/adr/`](docs/adr/) justify every load-bearing choice. Highlights :
+The 22 ADRs in [`docs/adr/`](docs/adr/) justify every load-bearing choice. Highlights :
 
 | # | Decision | Why it matters |
 |---|---|---|
 | [0001](docs/adr/0001-cerbos-as-policy-decision-point.md) | Cerbos as PDP | CNCF, signable, lintable, security-team familiar |
 | [0002](docs/adr/0002-pretooluse-hook-as-interception-point.md) | PreToolUse hook interception | Native Claude Code mechanism — no binary patching |
 | [0009](docs/adr/0009-hook-fails-closed.md) | Hook fails closed | Broker down → DENY by default, never bypass |
-| [0010](docs/adr/0010-network-egress-filter-allowlist.md) | Docker network egress allowlist | Defense-in-depth — survives hook bypass |
-| [0012](docs/adr/0012-defense-in-depth-layers.md) | 4 independent security layers | NIST SP 800-160 V1 §3.4 |
+| [0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md) | L2 tinyproxy CONNECT allowlist | Closes the v0.1 design-only L2 gap |
+| [0020](docs/adr/0020-l3-dns-allowlist-dnsmasq.md) | L3 dnsmasq DNS allowlist | Closes R-DNS-LEAK |
+| [0022](docs/adr/0022-intent-layer-vs-confinement-layers.md) | 1 intent layer + 3 confinement layers | Honest framing — supersedes ADR-0012 |
 | [0016](docs/adr/0016-supply-chain-cosign-sbom.md) | Cosign + SBOM | Provenance per OWASP A08:2021 |
+| [0021](docs/adr/0021-pin-claude-code-npm-version.md) | Pin Claude Code npm + Renovate | Closes the @latest hole in ADR-0008 |
 
 ## License
 

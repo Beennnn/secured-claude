@@ -163,6 +163,32 @@ def cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_audit_verify(args: argparse.Namespace) -> int:
+    """Walk the SQLite hash chain and report the first detected break.
+
+    Exit codes :
+      0 — chain intact
+      1 — chain broken (tampered or rows removed) ; report shows where
+      2 — DB unreadable / no chain to verify
+    """
+    console = Console()
+    store = Store()
+    n = store.count()
+    if n == 0:
+        console.print("[yellow]audit DB is empty — nothing to verify[/yellow]")
+        return 0
+    console.print(f"Verifying {n} row(s) in {store.path}...")
+    break_found = store.verify_chain()
+    if break_found is None:
+        console.print(f"[green]✓ chain intact across {n} row(s)[/green]")
+        return 0
+    console.print(f"[red]✗ chain broken at row #{break_found.row_id}[/red] (ts={break_found.ts})")
+    console.print(f"  reason  : {break_found.reason}")
+    console.print(f"  expected: {break_found.expected_hash}")
+    console.print(f"  actual  : {break_found.actual_hash}")
+    return 1
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Validate the install end-to-end : Python, Docker, images, policies, paths."""
     console = Console()
@@ -306,6 +332,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_audit.add_argument("--limit", type=int, default=100, help="max rows (default 100)")
     p_audit.add_argument("--json", action="store_true", help="emit JSONL instead of a table")
     p_audit.set_defaults(func=cmd_audit)
+
+    p_audit_verify = sub.add_parser(
+        "audit-verify",
+        help="walk the audit-log hash chain ; exit 1 if tampered (ADR-0024)",
+    )
+    p_audit_verify.set_defaults(func=cmd_audit_verify)
 
     sub.add_parser("doctor", help="validate prerequisites").set_defaults(func=cmd_doctor)
 

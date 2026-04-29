@@ -1,8 +1,17 @@
 # ADR-0012: Defense-in-depth — 4 independent layers
 
-- **Status**: Accepted
-- **Date**: 2026-04-29
+- **Status**: **Superseded by [ADR-0022](0022-intent-layer-vs-confinement-layers.md)** (2026-04-29 v0.3)
+- **Date**: 2026-04-29 (initial Accepted) → 2026-04-29 v0.3 (Superseded)
 - **Deciders**: Benoit Besson
+
+> **NOTE — superseded.** This ADR's "4 independent layers, each independently
+> sufficient" framing overstates what L2/L3/L4 actually do. Only L1 (the
+> Cerbos PDP via PreToolUse hook) understands the agent's *intent* ;
+> L2/L3/L4 are *confinement* layers that bound the blast radius if L1 is
+> bypassed but cannot replace L1's semantic decisions. See
+> [ADR-0022](0022-intent-layer-vs-confinement-layers.md) for the
+> reframed contract. The implementation didn't change ; only the
+> claim about how the layers relate.
 
 ## Context
 
