@@ -63,3 +63,4 @@ desktop.ini
 
 # Cerbos policy compilation cache
 .cerbos-cache/
+audit-reports/

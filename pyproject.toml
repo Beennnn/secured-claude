@@ -113,3 +113,15 @@ exclude_lines = [
 fail_under = 90
 show_missing = true
 skip_covered = false
+
+[tool.bandit]
+# Subprocess module usage is intrinsic to this project — orchestrator.py wraps
+# `docker compose` and cli.py runs `cerbos compile` in a temp container. Every
+# subprocess call uses an argv list (shell=False), references on PATH, and
+# inputs from a fixed set (compose file path, image tags, action verbs). The
+# ruff S603 rule enforces shell=False + argv list — already a tight gate.
+# We skip the corresponding bandit warnings (B404 import subprocess —
+# informational, B603 subprocess call — same risk as S603) to keep the
+# scan signal-to-noise high.
+skips = ["B404", "B603"]
+exclude_dirs = ["tests", ".venv", "build", "dist"]
