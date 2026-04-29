@@ -17,26 +17,45 @@ publish:pypi:
     - uv sync --all-extras --frozen
   script:
     - uv run python -m pip install --quiet twine
+    # --skip-existing : the wheel version comes from pyproject.toml (currently
+    # static "0.1.0") not from the git tag, so until we wire hatch-vcs (v0.2)
+    # any second tag pointing at the same commit re-uploads the same wheel
+    # filename and twine rejects with 400 Bad Request. --skip-existing turns
+    # that into a no-op so the rest of the publish stage keeps moving.
     - >
-      uv run twine upload
+      uv run twine upload --skip-existing
       --repository-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi"
       -u gitlab-ci-token -p "${CI_JOB_TOKEN}"
       dist/*
 
 publish:cosign-sign:
+  # gcr.io/projectsigstore/cosign image is distroless (no sh), so GitLab CI
+  # can't wrap the script. Same workaround as lint:cerbos-compile : alpine
+  # + the static `cosign` binary from the official GitHub release.
   stage: publish
-  image:
-    name: gcr.io/projectsigstore/cosign:v2.4.1
-    entrypoint: [""]
+  image: alpine:latest
+  variables:
+    COSIGN_VERSION: "2.4.1"
+    COSIGN_EXPERIMENTAL: "1"
   rules:
     - if: $CI_COMMIT_TAG
   needs: [build:image]
   id_tokens:
     SIGSTORE_ID_TOKEN:
       aud: sigstore
-  variables:
-    COSIGN_EXPERIMENTAL: "1"
   script:
+    - apk add --no-cache curl
+    - |
+      a=$(uname -m)
+      case "$a" in
+        x86_64)  arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *) echo "unsupported arch: $a"; exit 2 ;;
+      esac
+      curl -fsSL "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-${arch}" \
+        -o /usr/local/bin/cosign
+      chmod 0755 /usr/local/bin/cosign
+    - cosign version
     - cosign sign --yes "${CI_REGISTRY_IMAGE}/claude-code:${CI_COMMIT_TAG}"
     - >
       cosign verify
