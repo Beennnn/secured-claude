@@ -262,7 +262,10 @@ def test_audit_anchor_writes_json_to_file(
 
     db = tmp_path / "audit.db"
     _seed_audit(db, n=3)
-    monkeypatch.setattr("secured_claude.cli.Store", lambda: __import__("secured_claude.store", fromlist=["Store"]).Store(path=db))
+    monkeypatch.setattr(
+        "secured_claude.cli.Store",
+        lambda: __import__("secured_claude.store", fromlist=["Store"]).Store(path=db),
+    )
     out = tmp_path / "anchor.json"
     rc = cli.main(["audit-anchor", "-o", str(out)])
     assert rc == 0
