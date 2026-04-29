@@ -50,9 +50,15 @@ release:gitlab:
 
       ADR-0017 details the pipeline. SECURITY.md describes the threat model.
       EOF
+    # release-cli 0.24.0 SIGSEGV on --assets-link (upstream bug under
+    # investigation). For v0.1, we ship the Release object with description
+    # only ; the SBOM/wheel/cosign signature remain reachable via :
+    #   - GitLab Container Registry (image:vTAG, signed in Sigstore tlog)
+    #   - GitLab Package Registry (wheel for version 0.1.0)
+    #   - CI artifact endpoints linked from each successful job's page
+    # Asset-link wiring tracked for v0.2.
     - >
       release-cli create
       --name "secured-claude ${CI_COMMIT_TAG}"
       --description "$(cat release-description.md)"
       --tag-name "${CI_COMMIT_TAG}"
-      --assets-link "{\"name\":\"sbom-spdx\",\"url\":\"${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/raw/sbom.spdx.json\",\"link_type\":\"other\"}"
