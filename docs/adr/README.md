@@ -39,6 +39,9 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0025](0025-pre-built-sidecar-images.md) | Pre-built sidecar images for dns-filter + egress-proxy | Re-enables read_only on the sidecars (L4 parity with the agent) ; closes v0.2 apk-install-at-boot trade-off |
 | [0026](0026-runtime-smoke-ci-gate.md) | Runtime smoke as a CI gate (no API key burn) | Pulls the just-built images and verifies the wiring on every tag/main pipeline ; catches v0.1.1's hook-shebang class without burning Anthropic API budget |
 | [0027](0027-multi-principal-directory.md) | Multi-principal directory (config/principals.yaml) | Activates the v0.1 derived_roles (trusted_agent, auditor) ; broker maps principal_id → roles+attrs at request time |
+| [0028](0028-multi-arch-images-manifest-list.md) | True multi-arch images (linux/amd64 + linux/arm64) | Per-arch Kaniko builds + crane index append → manifest-list ; native binaries on Apple Silicon / Graviton, no QEMU |
+| [0029](0029-external-hash-anchor.md) | External hash anchor for audit log | `audit-anchor` emits a JSON commit to latest row_hash ; `audit-verify-anchor` detects post-anchor file tampering |
+| [0030](0030-real-llm-smoke-manual-trigger.md) | Real-LLM smoke as manual-trigger CI job | `smoke:llm-real` runs `claude -p` against the just-built image ; operator clicks to trigger after setting the protected API key variable |
 
 ### Operational envelope (where the code lives, how it's shipped)
 

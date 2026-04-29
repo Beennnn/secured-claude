@@ -189,6 +189,119 @@ def cmd_audit_verify(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_audit_anchor(args: argparse.Namespace) -> int:
+    """Emit an external hash anchor for the current audit log (ADR-0029).
+
+    Writes a JSON document committing to the latest row_hash + row_id + ts
+    of the audit DB. The operator stores this externally (S3 with object
+    lock, public timestamp authority, signed by their GPG key, etc.) and
+    later compares against the local chain via `audit-verify-anchor`.
+
+    A successful tamper of the local SQLite file (e.g. `rm approvals.db`)
+    produces a chain that no longer ends with the anchored hash — detectable
+    against any externally-stored copy.
+
+    Exit codes :
+      0 — anchor emitted
+      1 — empty audit DB / no chain to anchor
+    """
+    import json
+    from datetime import UTC, datetime
+
+    from secured_claude import __version__
+
+    console = Console()
+    store = Store()
+    n = store.count()
+    if n == 0:
+        console.print("[yellow]audit DB is empty — nothing to anchor[/yellow]")
+        return 1
+    rows = store.query(limit=1)
+    last = rows[0]
+    if last.row_hash is None:
+        console.print(
+            "[red]✗ latest row has no row_hash[/red] (pre-v0.3 row ; ADR-0024 chain not started)"
+        )
+        return 1
+    anchor = {
+        "anchor_format_version": "1.0",
+        "anchored_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "secured_claude_version": __version__,
+        "audit_db_path": str(store.path),
+        "row_count": n,
+        "last_row_id": last.id,
+        "last_row_ts": last.ts,
+        "last_row_hash": last.row_hash,
+        "verification": (
+            "Run `secured-claude audit-verify-anchor <this-file>` against the same DB "
+            "later — exit 0 if the chain still ends with last_row_hash, exit 1 if "
+            "tampering occurred between anchor and verify."
+        ),
+    }
+    output = args.output or "-"
+    payload = json.dumps(anchor, indent=2, ensure_ascii=False)
+    if output == "-":
+        print(payload)
+    else:
+        Path(output).write_text(payload + "\n", encoding="utf-8")
+        console.print(f"[green]✓ anchor written to {output}[/green]")
+        console.print(f"  last_row_id   : {last.id}")
+        console.print(f"  last_row_hash : {last.row_hash}")
+    return 0
+
+
+def cmd_audit_verify_anchor(args: argparse.Namespace) -> int:
+    """Verify the current audit DB still ends with the anchor's last_row_hash.
+
+    Exit codes :
+      0 — anchor matches the current chain (or the chain extends past it
+          cleanly — anchor is a snapshot, the chain can grow forward)
+      1 — anchor mismatch (tampering between anchor and verify)
+      2 — anchor file unreadable or malformed
+    """
+    import json
+
+    console = Console()
+    try:
+        anchor = json.loads(Path(args.anchor_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        console.print(f"[red]✗ cannot read anchor file: {e}[/red]")
+        return 2
+    expected_id = int(anchor["last_row_id"])
+    expected_hash = str(anchor["last_row_hash"])
+    store = Store()
+    # Look up the row at expected_id and compare its row_hash
+    rows = store.query(limit=10000)  # query is descending
+    target = next((r for r in rows if r.id == expected_id), None)
+    if target is None:
+        console.print(
+            f"[red]✗ anchored row #{expected_id} not in current DB[/red] "
+            "(rows were removed, or DB was reset)"
+        )
+        return 1
+    if target.row_hash != expected_hash:
+        console.print(
+            f"[red]✗ row #{expected_id} hash mismatch[/red]\n"
+            f"  anchor : {expected_hash}\n"
+            f"  actual : {target.row_hash}"
+        )
+        return 1
+    # Also walk the full chain forward to ensure no break above the anchor.
+    break_found = store.verify_chain()
+    if break_found is not None:
+        console.print(
+            f"[red]✗ chain broken at row #{break_found.row_id}[/red] "
+            f"(after the anchor at row #{expected_id} ; tampering happened later)"
+        )
+        return 1
+    console.print(
+        f"[green]✓ anchor matches[/green] — row #{expected_id} hash "
+        f"{expected_hash[:16]}… is intact, full chain verified up to row "
+        f"#{store.count()}"
+    )
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Validate the install end-to-end : Python, Docker, images, policies, paths."""
     console = Console()
@@ -338,6 +451,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="walk the audit-log hash chain ; exit 1 if tampered (ADR-0024)",
     )
     p_audit_verify.set_defaults(func=cmd_audit_verify)
+
+    p_audit_anchor = sub.add_parser(
+        "audit-anchor",
+        help="emit an external anchor for the audit log (ADR-0029) ; commit "
+        "to latest row hash so post-tamper deletion is detectable",
+    )
+    p_audit_anchor.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        help="path to write the anchor JSON (default : stdout)",
+    )
+    p_audit_anchor.set_defaults(func=cmd_audit_anchor)
+
+    p_audit_verify_anchor = sub.add_parser(
+        "audit-verify-anchor",
+        help="check the current audit DB chain still matches the anchor file (ADR-0029)",
+    )
+    p_audit_verify_anchor.add_argument("anchor_path", help="path to the anchor JSON")
+    p_audit_verify_anchor.set_defaults(func=cmd_audit_verify_anchor)
 
     sub.add_parser("doctor", help="validate prerequisites").set_defaults(func=cmd_doctor)
 

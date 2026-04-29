@@ -80,8 +80,10 @@ publish:pypi:
 
 publish:cosign-sign:
   extends: .cosign-sign-base
-  needs: [build:image]
+  needs: [build:image:manifest]
   script:
+    # Sign the manifest list (the v0.4 multi-arch index) ; the signature
+    # covers both linux/amd64 + linux/arm64 manifests it references.
     - cosign sign --yes "${CI_REGISTRY_IMAGE}/claude-code:${CI_COMMIT_TAG}"
     - >
       cosign verify
@@ -91,7 +93,7 @@ publish:cosign-sign:
 
 publish:cosign-sign:dns-filter:
   extends: .cosign-sign-base
-  needs: [build:image:dns-filter]
+  needs: [build:image:manifest]
   script:
     - cosign sign --yes "${CI_REGISTRY_IMAGE}/dns-filter:${CI_COMMIT_TAG}"
     - >
@@ -102,7 +104,7 @@ publish:cosign-sign:dns-filter:
 
 publish:cosign-sign:egress-proxy:
   extends: .cosign-sign-base
-  needs: [build:image:egress-proxy]
+  needs: [build:image:manifest]
   script:
     - cosign sign --yes "${CI_REGISTRY_IMAGE}/egress-proxy:${CI_COMMIT_TAG}"
     - >

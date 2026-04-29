@@ -228,3 +228,110 @@ def test_policy_stats_renders_table(
     assert rc == 0
     captured = capsys.readouterr()
     assert "Top approved" in captured.out
+
+
+# ────────────────────────────────────────────────────────────────────
+# ADR-0029 — external audit log hash anchor
+# ────────────────────────────────────────────────────────────────────
+
+
+def _seed_audit(store_path: Path, n: int = 3) -> None:
+    """Insert n audit rows into a temp store so anchor/verify-anchor have material."""
+    from secured_claude.store import Store
+
+    s = Store(path=store_path)
+    for i in range(n):
+        s.insert(
+            session_id="s1",
+            principal_id="claude-code-default",
+            principal_roles=["agent"],
+            resource_kind="file",
+            resource_id=f"/workspace/x{i}",
+            action="read",
+            decision="ALLOW",
+        )
+
+
+def test_audit_anchor_writes_json_to_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`audit-anchor -o <path>` writes an anchor JSON with the latest hash."""
+    import json
+
+    db = tmp_path / "audit.db"
+    _seed_audit(db, n=3)
+    monkeypatch.setattr(
+        "secured_claude.cli.Store",
+        lambda: __import__("secured_claude.store", fromlist=["Store"]).Store(path=db),
+    )
+    out = tmp_path / "anchor.json"
+    rc = cli.main(["audit-anchor", "-o", str(out)])
+    assert rc == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["anchor_format_version"] == "1.0"
+    assert payload["row_count"] == 3
+    assert payload["last_row_id"] == 3
+    assert len(payload["last_row_hash"]) == 64  # SHA-256 hex
+
+
+def test_audit_anchor_empty_db_exits_1(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db = tmp_path / "empty.db"
+    from secured_claude.store import Store
+
+    Store(path=db)  # creates the schema, 0 rows
+    monkeypatch.setattr("secured_claude.cli.Store", lambda: Store(path=db))
+    rc = cli.main(["audit-anchor"])
+    assert rc == 1
+
+
+def test_audit_verify_anchor_succeeds_on_intact_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Emit an anchor, don't tamper, verify-anchor → 0."""
+    from secured_claude.store import Store
+
+    db = tmp_path / "audit.db"
+    _seed_audit(db, n=2)
+    monkeypatch.setattr("secured_claude.cli.Store", lambda: Store(path=db))
+    anchor_path = tmp_path / "anchor.json"
+    cli.main(["audit-anchor", "-o", str(anchor_path)])
+    rc = cli.main(["audit-verify-anchor", str(anchor_path)])
+    assert rc == 0
+
+
+def test_audit_verify_anchor_detects_tampered_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Emit anchor, tamper with the anchored row, verify-anchor → 1."""
+    import sqlite3
+
+    from secured_claude.store import Store
+
+    db = tmp_path / "audit.db"
+    _seed_audit(db, n=2)
+    monkeypatch.setattr("secured_claude.cli.Store", lambda: Store(path=db))
+    anchor_path = tmp_path / "anchor.json"
+    cli.main(["audit-anchor", "-o", str(anchor_path)])
+    # Tamper : drop the no-update trigger and rewrite row 2's content,
+    # leaving the original row_hash in place. verify-anchor walks the chain
+    # and detects the row_hash mismatch on recomputation.
+    with sqlite3.connect(db) as conn:
+        conn.execute("DROP TRIGGER approvals_no_update")
+        conn.execute("UPDATE approvals SET decision='DENY' WHERE id=2")
+        conn.commit()
+    rc = cli.main(["audit-verify-anchor", str(anchor_path)])
+    assert rc == 1
+
+
+def test_audit_verify_anchor_unreadable_file_exits_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing or malformed anchor file → exit 2."""
+    rc = cli.main(["audit-verify-anchor", str(tmp_path / "nonexistent.json")])
+    assert rc == 2

@@ -1,5 +1,17 @@
 ---
-# Build stage — Python wheel + sdist, multi-arch container image.
+# Build stage — Python wheel + sdist + multi-arch container images.
+#
+# v0.4.0 (ADR-0028) ships true multi-arch images : every release tag has a
+# manifest-list pointing at native linux/amd64 + linux/arm64 manifests.
+# Apple Silicon / AWS Graviton users get native arm64 ; everyone else
+# gets amd64. No more QEMU emulation overhead at runtime.
+#
+# Pipeline structure :
+#   * On dev / MR / main : build amd64 only (cheap iteration loop).
+#   * On tag : build amd64 + arm64 in parallel, then `crane index append`
+#     combines them into a manifest-list under the canonical tag.
+#   * Cosign signs the canonical tag (= the manifest index) ; the
+#     signature covers both arches per cosign-on-manifest-list semantics.
 
 build:python:
   stage: build
@@ -12,8 +24,8 @@ build:python:
   before_script:
     # hatch-vcs reads the package version from the latest git tag (ADR-0018).
     # The bookworm-slim image doesn't bundle git ; install it so `uv build`
-    # can resolve the version. The Kaniko build:image job uses a different
-    # base and doesn't need this.
+    # can resolve the version. The Kaniko build:image jobs use a different
+    # base and don't need this.
     - apt-get update -qq && apt-get install -y --no-install-recommends git
     # GitLab clones with depth=20 by default — ensure the tag is reachable.
     - git fetch --tags --depth=100 || true
@@ -25,33 +37,16 @@ build:python:
     paths: [dist/]
     expire_in: 90 days
 
-build:image:
-  # Daemonless image build via Kaniko : the macbook-local runner's mounted
-  # /var/run/docker.sock works for `docker login` but `docker build` /
-  # `buildx` consistently fail to dial the daemon (vpnkit proxy quirk on
-  # Mac Docker Desktop). Kaniko builds the image without a Docker daemon
-  # and pushes to the registry directly.
-  #
-  # `--customPlatform=linux/amd64` pins the resulting image to amd64
-  # regardless of the runner's native arch (the macbook-local runner is
-  # arm64 — Apple Silicon — so without this flag v0.1.8 shipped as
-  # architecture=arm64 only, which broke amd64 users with `exec format
-  # error` unless they ran QEMU). amd64 is the larger enterprise base.
-  # arm64 users (Apple Silicon, AWS Graviton) currently fall back to
-  # QEMU emulation under Docker Desktop / containerd binfmt_misc.
-  # True multi-arch (manifest list with both linux/amd64 + linux/arm64)
-  # is tracked for v0.3 — needs two Kaniko jobs + crane index append
-  # to combine, see the v0.2 README "configured but NOT yet enforced"
-  # table.
+# ---------------------------------------------------------------------------
+# Hidden template — Kaniko + per-arch destination tag scheme.
+# Concrete jobs extend this with IMAGE_NAME, DOCKERFILE, ARCH, RULES vars.
+# ---------------------------------------------------------------------------
+
+.kaniko-build-base:
   stage: build
   image:
     name: gcr.io/kaniko-project/executor:v1.23.2-debug
     entrypoint: [""]
-  rules:
-    - if: $CI_COMMIT_TAG
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_COMMIT_BRANCH == "dev"
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   script:
     - mkdir -p /kaniko/.docker
     - |
@@ -59,82 +54,155 @@ build:image:
       {"auths":{"${CI_REGISTRY}":{"auth":"$(printf '%s:%s' "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 -w0)"}}}
       EOF
     - |
-      DESTS="--destination=${CI_REGISTRY_IMAGE}/claude-code:${CI_COMMIT_SHA}"
-      [ -n "${CI_COMMIT_TAG}" ] && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/claude-code:${CI_COMMIT_TAG}"
-      [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ] && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/claude-code:latest"
+      # Always push the per-arch tag :${SHA}-${ARCH} (and :${TAG}-${ARCH}
+      # on tag pipelines). The amd64 build ALSO pushes the canonical
+      # :${SHA} (no suffix) and :latest (main only) — these are the
+      # backward-compatible tags that pre-v0.4 jobs (smoke, downstream
+      # consumers) expect. On tag pipelines, build:image:manifest
+      # OVERWRITES :${SHA} + :${TAG} with the multi-arch index so the
+      # canonical tag always resolves correctly :
+      #   * dev / MR / main → :${SHA} = amd64-only manifest
+      #   * tag             → :${SHA} = multi-arch index
+      DESTS="--destination=${CI_REGISTRY_IMAGE}/${IMAGE_NAME}:${CI_COMMIT_SHA}-${ARCH}"
+      [ -n "${CI_COMMIT_TAG}" ] && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/${IMAGE_NAME}:${CI_COMMIT_TAG}-${ARCH}"
+      if [ "${ARCH}" = "amd64" ]; then
+        DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/${IMAGE_NAME}:${CI_COMMIT_SHA}"
+        [ -n "${CI_COMMIT_TAG}" ] && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/${IMAGE_NAME}:${CI_COMMIT_TAG}"
+        [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ] \
+          && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/${IMAGE_NAME}:latest"
+      fi
     - >
       /kaniko/executor
       --context "${CI_PROJECT_DIR}"
-      --dockerfile "${CI_PROJECT_DIR}/Dockerfile.claude-code"
-      --customPlatform=linux/amd64
+      --dockerfile "${CI_PROJECT_DIR}/${DOCKERFILE}"
+      --customPlatform=linux/${ARCH}
       ${DESTS}
       --cache=true
       --cache-ttl=24h
-      --cache-repo="${CI_REGISTRY_IMAGE}/claude-code-cache"
+      --cache-repo="${CI_REGISTRY_IMAGE}/${IMAGE_NAME}-cache"
 
 # ---------------------------------------------------------------------------
-# Sidecar images (ADR-0025) — pre-built so the runtime container can be
-# read_only:true. The Dockerfiles are tiny (FROM alpine + apk add + ENTRYPOINT)
-# so build time is < 30 s each. Same Kaniko + linux/amd64 + caching pattern
-# as build:image (the agent).
+# amd64 builds — run on every dev / MR / main / tag pipeline.
 # ---------------------------------------------------------------------------
+
+build:image:
+  extends: .kaniko-build-base
+  variables:
+    IMAGE_NAME: "claude-code"
+    DOCKERFILE: "Dockerfile.claude-code"
+    ARCH: "amd64"
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_BRANCH == "dev"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
 build:image:dns-filter:
-  stage: build
-  image:
-    name: gcr.io/kaniko-project/executor:v1.23.2-debug
-    entrypoint: [""]
+  extends: .kaniko-build-base
+  variables:
+    IMAGE_NAME: "dns-filter"
+    DOCKERFILE: "Dockerfile.dns-filter"
+    ARCH: "amd64"
   rules:
     - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_BRANCH == "dev"
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-  script:
-    - mkdir -p /kaniko/.docker
-    - |
-      cat > /kaniko/.docker/config.json <<EOF
-      {"auths":{"${CI_REGISTRY}":{"auth":"$(printf '%s:%s' "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 -w0)"}}}
-      EOF
-    - |
-      DESTS="--destination=${CI_REGISTRY_IMAGE}/dns-filter:${CI_COMMIT_SHA}"
-      [ -n "${CI_COMMIT_TAG}" ] && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/dns-filter:${CI_COMMIT_TAG}"
-      [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ] && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/dns-filter:latest"
-    - >
-      /kaniko/executor
-      --context "${CI_PROJECT_DIR}"
-      --dockerfile "${CI_PROJECT_DIR}/Dockerfile.dns-filter"
-      --customPlatform=linux/amd64
-      ${DESTS}
-      --cache=true
-      --cache-ttl=24h
-      --cache-repo="${CI_REGISTRY_IMAGE}/dns-filter-cache"
 
 build:image:egress-proxy:
-  stage: build
-  image:
-    name: gcr.io/kaniko-project/executor:v1.23.2-debug
-    entrypoint: [""]
+  extends: .kaniko-build-base
+  variables:
+    IMAGE_NAME: "egress-proxy"
+    DOCKERFILE: "Dockerfile.egress-proxy"
+    ARCH: "amd64"
   rules:
     - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_BRANCH == "dev"
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# arm64 builds — tag-only (cheap iteration loops stay amd64-only).
+# Native on the macbook-local runner ; no QEMU emulation needed.
+# ---------------------------------------------------------------------------
+
+build:image:arm64:
+  extends: .kaniko-build-base
+  variables:
+    IMAGE_NAME: "claude-code"
+    DOCKERFILE: "Dockerfile.claude-code"
+    ARCH: "arm64"
+  rules:
+    - if: $CI_COMMIT_TAG
+
+build:image:dns-filter:arm64:
+  extends: .kaniko-build-base
+  variables:
+    IMAGE_NAME: "dns-filter"
+    DOCKERFILE: "Dockerfile.dns-filter"
+    ARCH: "arm64"
+  rules:
+    - if: $CI_COMMIT_TAG
+
+build:image:egress-proxy:arm64:
+  extends: .kaniko-build-base
+  variables:
+    IMAGE_NAME: "egress-proxy"
+    DOCKERFILE: "Dockerfile.egress-proxy"
+    ARCH: "arm64"
+  rules:
+    - if: $CI_COMMIT_TAG
+
+# ---------------------------------------------------------------------------
+# Manifest combiner — `crane index append` makes the canonical :${TAG}
+# point at a manifest-list that references both per-arch manifests.
+# Cosign signs :${TAG} (the index) ; the signature covers both arches.
+# Tag-only ; per-SHA / latest tags stay amd64-only by design (the dev
+# loop doesn't need arm64 — that's a QEMU cost we'd pay every commit
+# for no enterprise benefit).
+# ---------------------------------------------------------------------------
+
+build:image:manifest:
+  stage: build
+  image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+  rules:
+    - if: $CI_COMMIT_TAG
+  needs:
+    - build:image
+    - build:image:arm64
+    - build:image:dns-filter
+    - build:image:dns-filter:arm64
+    - build:image:egress-proxy
+    - build:image:egress-proxy:arm64
+  variables:
+    CRANE_VERSION: "0.20.5"
   script:
-    - mkdir -p /kaniko/.docker
+    - apk add --no-cache curl
     - |
-      cat > /kaniko/.docker/config.json <<EOF
-      {"auths":{"${CI_REGISTRY}":{"auth":"$(printf '%s:%s' "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 -w0)"}}}
-      EOF
+      a=$(uname -m)
+      case "$a" in
+        x86_64)  arch_tag="x86_64" ;;
+        aarch64|arm64) arch_tag="arm64" ;;
+        *) echo "unsupported arch: $a"; exit 2 ;;
+      esac
+      curl -fsSL "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_${arch_tag}.tar.gz" \
+        | tar -xz -C /usr/local/bin crane
+      crane version
+    - crane auth login -u "${CI_REGISTRY_USER}" -p "${CI_REGISTRY_PASSWORD}" "${CI_REGISTRY}"
     - |
-      DESTS="--destination=${CI_REGISTRY_IMAGE}/egress-proxy:${CI_COMMIT_SHA}"
-      [ -n "${CI_COMMIT_TAG}" ] && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/egress-proxy:${CI_COMMIT_TAG}"
-      [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ] && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/egress-proxy:latest"
-    - >
-      /kaniko/executor
-      --context "${CI_PROJECT_DIR}"
-      --dockerfile "${CI_PROJECT_DIR}/Dockerfile.egress-proxy"
-      --customPlatform=linux/amd64
-      ${DESTS}
-      --cache=true
-      --cache-ttl=24h
-      --cache-repo="${CI_REGISTRY_IMAGE}/egress-proxy-cache"
+      # For each image, combine the amd64 + arm64 manifests into a
+      # manifest-list under :${TAG} (and :${SHA} for traceability).
+      for img in claude-code dns-filter egress-proxy; do
+        echo "===== $img : amd64 + arm64 → manifest list ====="
+        crane index append \
+          -m "${CI_REGISTRY_IMAGE}/${img}:${CI_COMMIT_TAG}-amd64" \
+          -m "${CI_REGISTRY_IMAGE}/${img}:${CI_COMMIT_TAG}-arm64" \
+          -t "${CI_REGISTRY_IMAGE}/${img}:${CI_COMMIT_TAG}"
+        # Also tag the multi-arch manifest at :${SHA} for cosign-sign
+        # jobs and runtime smoke (which look up by SHA).
+        crane index append \
+          -m "${CI_REGISTRY_IMAGE}/${img}:${CI_COMMIT_SHA}-amd64" \
+          -m "${CI_REGISTRY_IMAGE}/${img}:${CI_COMMIT_SHA}-arm64" \
+          -t "${CI_REGISTRY_IMAGE}/${img}:${CI_COMMIT_SHA}"
+      done
+    - echo "✓ multi-arch manifest list pushed for all 3 images"
