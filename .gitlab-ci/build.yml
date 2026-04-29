@@ -19,11 +19,13 @@ build:python:
     expire_in: 90 days
 
 build:image:
+  # Single-arch (arm64 on macbook-local) for v0.1.x. Multi-arch via buildx
+  # requires either Docker-in-Docker (privileged) or a remote builder ;
+  # the runner-mounted /var/run/docker.sock didn't carry buildx-create
+  # capability through. Tracked for v0.2 with Kaniko or proper buildx DinD.
   stage: build
   image: docker:27
   variables:
-    # Use the runner-mounted host socket (no DinD overhead) — see
-    # docs/dev/developer-environment.md §"GitLab CI runner setup"
     DOCKER_HOST: "unix:///var/run/docker.sock"
   rules:
     - if: $CI_COMMIT_TAG
@@ -38,13 +40,8 @@ build:image:
       if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
         TAGS="$TAGS -t ${CI_REGISTRY_IMAGE}/claude-code:latest"
       fi
-    - docker buildx create --use --name secured-claude-builder --bootstrap || true
-    - >
-      docker buildx build
-      --platform linux/amd64,linux/arm64
-      --cache-from "type=registry,ref=${CI_REGISTRY_IMAGE}/claude-code:cache"
-      --cache-to "type=registry,ref=${CI_REGISTRY_IMAGE}/claude-code:cache,mode=max"
-      ${TAGS}
-      --push
-      -f Dockerfile.claude-code
-      .
+    - docker build ${TAGS} -f Dockerfile.claude-code .
+    - |
+      for tag_arg in $(echo "$TAGS" | tr ' ' '\n' | grep -v '^-t$' | grep -v '^$'); do
+        docker push "$tag_arg"
+      done

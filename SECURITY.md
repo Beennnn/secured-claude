@@ -15,16 +15,21 @@ We follow [RFC 9116](https://www.rfc-editor.org/rfc/rfc9116) coordinated vulnera
 
 For the well-known machine-readable contact file see [`.well-known/security.txt`](.well-known/security.txt).
 
-## Defense-in-depth — four independent layers
+## Defense-in-depth — four layers, but not all enforced in v0.1
 
-Every tool invocation by the agent traverses **four orthogonal controls**, each independently sufficient to block its threat class. Compromising one layer does not compromise the system.
+**Target architecture** : every tool invocation by the agent traverses **four orthogonal controls**, designed so each is independently sufficient to block its threat class. Compromising one layer does not compromise the system.
 
-| Layer | Mechanism | Threats mitigated |
-|---|---|---|
-| **L1 — Application** | PreToolUse hook → Cerbos PDP `CheckResources` → `permissionDecision` | Tool intent abuse (Read sensitive paths, dangerous Bash, MCP exploitation, etc.) |
-| **L2 — Network** | Docker network egress allowlist (`api.anthropic.com`, broker only) | Data exfiltration via syscall-level network calls inside an approved Bash command |
-| **L3 — Filesystem** | Container `/workspace` mount only, host FS invisible | Lateral access to credentials (`~/.ssh`, `~/.aws`, `.env`), arbitrary host writes |
-| **L4 — Container hardening** | Non-root UID, read-only root FS, `cap-drop=ALL`, default seccomp profile, cgroup limits | Kernel-side escalation, privilege abuse |
+| Layer | Mechanism | Threats mitigated | v0.1 status |
+|---|---|---|---|
+| **L1 — Application** | PreToolUse hook → Cerbos PDP `CheckResources` → `permissionDecision` | Tool intent abuse (Read sensitive paths, dangerous Bash, MCP exploitation, etc.) | **Enforced + tested** (`bin/security-audit.sh` 26/26) |
+| **L2 — Network** | Docker network egress allowlist (`api.anthropic.com`, broker only) | Data exfiltration via syscall-level network calls inside an approved Bash command | **Designed in ADR-0010, NOT enforced** — `secured-claude-net` bridge allows all egress in v0.1 ; sidecar proxy v0.2 |
+| **L3 — Filesystem** | Container `/workspace` mount only, host FS invisible | Lateral access to credentials (`~/.ssh`, `~/.aws`, `.env`), arbitrary host writes | **Enforced** ; v0.1 has no explicit test (relies on Docker's mount semantics) |
+| **L4 — Container hardening** | Non-root UID, read-only root FS, `cap-drop=ALL`, default seccomp profile, cgroup limits | Kernel-side escalation, privilege abuse | **Enforced** as of v0.1.2 (read-only rootfs flipped from `false` to `true` with explicit tmpfs for `/tmp`/`/run`/`.cache`) |
+
+So v0.1 is **L1-load-bearing, with L3/L4 supporting**. L2 is the gap
+that closes in v0.2 — the README's `What is configured but NOT yet
+enforced` table calls this out explicitly. A senior reviewer should
+read both before trusting "secured by design" outright.
 
 Full mapping of each threat to defending layers : [`docs/security/threat-model.md`](docs/security/threat-model.md).
 
