@@ -1,7 +1,7 @@
 """FastAPI gateway — receives PreToolUse hook intents, queries Cerbos, logs to SQLite.
 
 Implements ADR-0001 (Cerbos PDP), ADR-0002 (hook interception), ADR-0004
-(append-only audit log), ADR-0009 (fail-closed).
+(append-only audit log), ADR-0009 (fail-closed), ADR-0027 (multi-principal).
 """
 
 from __future__ import annotations
@@ -9,8 +9,10 @@ from __future__ import annotations
 import logging
 import os
 import urllib.parse
+from pathlib import Path
 from typing import Any
 
+import yaml
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
@@ -19,6 +21,55 @@ from secured_claude.cerbos_client import CerbosClient, CheckResult
 from secured_claude.store import Store
 
 log = logging.getLogger(__name__)
+
+# Default principal — matches the v0.1+v0.2 hardcoded behaviour. The
+# config/principals.yaml directory ships with this id mapped to roles=[agent],
+# trust_level=0, no scope. Callers that don't set SECURED_CLAUDE_PRINCIPAL
+# (or pass principal_id="claude-code-default") get this exact behaviour.
+_DEFAULT_PRINCIPAL_ID = "claude-code-default"
+_DEFAULT_PRINCIPAL: dict[str, Any] = {
+    "roles": ["agent"],
+    "attributes": {"trust_level": 0},
+}
+
+
+def load_principals(path: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Load the principal directory from config/principals.yaml.
+
+    Returns a {principal_id → {roles, attributes}} mapping. Missing file or
+    malformed YAML returns the single-default-principal fallback (matches
+    pre-v0.3.1 hardcoded behaviour). Reading is best-effort : we never
+    fail-closed at startup over a missing principals file, only on
+    Cerbos calls themselves (ADR-0009).
+    """
+    if path is None:
+        env = os.environ.get("SECURED_CLAUDE_PRINCIPALS")
+        path = Path(env) if env else Path("config/principals.yaml")
+    fallback = {_DEFAULT_PRINCIPAL_ID: _DEFAULT_PRINCIPAL}
+    if not path.exists():
+        log.info("principals file %s not found ; using single-default fallback", path)
+        return fallback
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        log.exception("principals file %s is malformed YAML ; using fallback", path)
+        return fallback
+    raw = data.get("principals") if isinstance(data, dict) else None
+    if not isinstance(raw, dict):
+        log.warning("principals file %s has no `principals:` key ; using fallback", path)
+        return fallback
+    out: dict[str, dict[str, Any]] = {}
+    for pid, entry in raw.items():
+        if not isinstance(entry, dict):
+            continue
+        roles = entry.get("roles") or ["agent"]
+        attributes = entry.get("attributes") or {}
+        if not isinstance(roles, list) or not isinstance(attributes, dict):
+            continue
+        out[str(pid)] = {"roles": [str(r) for r in roles], "attributes": dict(attributes)}
+    if _DEFAULT_PRINCIPAL_ID not in out:
+        out[_DEFAULT_PRINCIPAL_ID] = _DEFAULT_PRINCIPAL
+    return out
 
 
 class CheckRequest(BaseModel):
@@ -102,23 +153,33 @@ def map_tool_to_resource(
 def make_app(
     cerbos: CerbosClient | None = None,
     store: Store | None = None,
+    principals: dict[str, dict[str, Any]] | None = None,
 ) -> FastAPI:
     """Build the FastAPI app. Test code injects mocks via `cerbos` and `store`."""
     cerbos_client = cerbos or CerbosClient(
         base_url=os.environ.get("CERBOS_URL", "http://127.0.0.1:3592")
     )
     audit_store = store or Store()
+    principal_directory = principals if principals is not None else load_principals()
 
     app = FastAPI(title="secured-claude broker", version=__version__)
 
     @app.post("/check", response_model=CheckResponse)
     def check(req: CheckRequest) -> CheckResponse:
         kind, rid, action, attr = map_tool_to_resource(req.tool, req.tool_input)
+        # Resolve roles + attributes from the principal directory (ADR-0027).
+        # Unknown principal_id falls back to the default — fail-open here is
+        # safe because the resulting roles/attrs are minimal (agent + trust=0),
+        # and the Cerbos policies still gate every action.
+        principal_entry = principal_directory.get(req.principal_id) or _DEFAULT_PRINCIPAL
+        roles = list(principal_entry.get("roles") or ["agent"])
+        principal_attr = dict(principal_entry.get("attributes") or {})
+
         try:
             result: CheckResult = cerbos_client.check(
                 principal_id=req.principal_id,
-                principal_roles=["agent", "claude_agent"],
-                principal_attr={"trust_level": 0},
+                principal_roles=roles,
+                principal_attr=principal_attr,
                 resource_kind=kind,
                 resource_id=rid,
                 resource_attr=attr,
@@ -137,7 +198,7 @@ def make_app(
         decision_id = audit_store.insert(
             session_id=req.session_id,
             principal_id=req.principal_id,
-            principal_roles=["agent", "claude_agent"],
+            principal_roles=roles,
             resource_kind=kind,
             resource_id=rid,
             action=action,
