@@ -77,22 +77,46 @@ secured-claude audit --denied
 | 7-layer security pipeline | `bin/security-scans.sh` + `pyproject.toml [tool.bandit]` | `bash bin/security-scans.sh` |
 | SBOM (SPDX 2.3) per release | `.gitlab-ci/security.yml::security:sbom` | release artifact `sbom.spdx.json` |
 
-### What is configured but NOT yet exercised end-to-end
+### What is configured but NOT yet enforced — be explicit
 
-| Item | State | When it goes live |
+A senior security reviewer should read this table before trusting any
+"defense-in-depth" claim. v0.1.x ships a credible **prototype** with a
+working policy gate ; **L2 (network egress allowlist) is designed but
+NOT enforced at the kernel level**, and a few other items are documented
+ahead of being live.
+
+| Item | v0.1 reality | When it goes live |
 |---|---|---|
-| Cosign keyless signature on container image | Pipeline job exists (`publish:cosign-sign`) ; runs on tag push | First release tag's pipeline (the v0.1.1 tag pipeline is RUNNING as of writing — verify at the link above) |
-| GitLab Release with auto-generated assets | `release:gitlab` job exists | Same — runs after `publish:*` succeed |
-| Network egress allowlist (L2 of defense-in-depth) | Designed in ADR-0010, NOT yet enforced via Docker network rules in v0.1 | v0.2 — see ADR-0010 §"Implementation tactics by platform" + threat-model §"Honest limits" |
-| Multi-principal Cerbos roles | `derived_roles.yaml` defines them, broker uses single principal `claude-code-default` | v0.2 |
-| DNS allowlist (mitigates R-DNS-LEAK residual risk) | Documented as known limitation in threat-model.md | v0.2 |
+| **L2 — Network egress allowlist** | The `secured-claude-net` Docker bridge currently allows all egress. ADR-0010 specifies iptables (Linux) / sidecar HTTP proxy (cross-platform) ; **neither is implemented yet**. The hook (L1) is the only thing today preventing `WebFetch evil.com` ; a malicious post-install script in an approved `npm install` would not be blocked at the network layer. | v0.2 — sidecar HTTP allowlisting proxy + DNS filter |
+| **Cosign keyless OIDC signature** on container image | Pipeline job exists (`publish:cosign-sign`) ; v0.1.1 release pipeline failed at `build:image` (buildx daemon access on Mac runner) so cosign was skipped. The wheel IS in GitLab Package Registry but the image is not signed yet. | v0.1.2 — `build:image` simplified to single-arch + `docker build` ; cosign chain re-validates on next tag |
+| **GitLab Release with auto-attached SBOM + wheel + sig** | `release:gitlab` job exists ; same skip as above on v0.1.1 | v0.1.2 |
+| **Audit log tamper-evidence at FS layer** | App + SQLite trigger refuse `UPDATE`/`DELETE` on `approvals` (tested). But a `rm approvals.db` from another process succeeds — the log is not tamper-EVIDENT, just append-only at the SQL boundary. | v0.2 — hash-chain entries (each row's hash includes previous), optional SIEM JSONL forward |
+| **Multi-principal Cerbos roles** | `derived_roles.yaml` defines them ; broker hardcodes single principal `claude-code-default` | v0.2 |
+| **DNS allowlist** (mitigates R-DNS-LEAK residual risk) | Documented in threat-model.md ; not implemented | v0.2 |
+| **Runtime smoke in CI** (real claude binary call) | Recipe exists (`secured-claude up && claude -p ...`), runs locally pre-tag ; not yet a CI job | v0.2 — uses a test API key in a GitLab CI variable |
+| **Hook coverage of every Claude Code tool** | `matcher: "*"` in PreToolUse hooks every tool we know about (Read/Write/Edit/Bash/WebFetch/WebSearch/MCP/Task). Anthropic adds tools faster than we audit ; **a new tool shipping in a future Claude Code release would default to ALLOW until we map it**. Mitigated by the broker's `unknown_tool` catch-all (kind=`unknown_tool` action=`invoke`) which has no policy rule → DENY by Cerbos default ; verified by `tests/test_gateway.py::test_map_unknown_tool_falls_back`. | Continuous — Renovate bumps Claude Code, audit-demo adds scenarios per new tool |
 
 ### What we explicitly DON'T claim to defend against
 
 - Kernel CVEs / 0-days — Linux namespace isolation is the v0.1 boundary ; gVisor or Firecracker tracked v0.3+
 - Side-channel attacks (Spectre/Meltdown class)
 - Physical adversary at the developer machine
-- Compromise of `cerbos/cerbos` upstream image — mitigated by digest pinning, residual risk acknowledged
+- Compromise of `cerbos/cerbos` upstream image — mitigated by digest pinning ; residual risk acknowledged
+
+### Honest scoring of "defense-in-depth" in v0.1
+
+| Layer | Designed | Enforced in v0.1 | Tested in v0.1 |
+|---|---|---|---|
+| **L1 — PreToolUse hook + Cerbos PDP** | Yes | Yes | `bin/security-audit.sh` → 26/26 PASS + runtime smoke transcript |
+| **L2 — Network egress allowlist** | Yes (ADR-0010) | **No** — bridge network allows all egress | n/a |
+| **L3 — Filesystem confinement** | Yes | Yes — only `/workspace` mounted RW from host | Inferred ; no explicit test that `/Users/<me>/.ssh` is unreachable |
+| **L4 — Container hardening** | Yes | Partial — non-root + cap_drop ALL + seccomp default + read-only rootfs (cerbos AND claude-code as of v0.1.2) ; cgroup `mem_limit: 4g` | Inferred ; no explicit test (`docker inspect` would prove flags are set) |
+
+Reading : v0.1 holds **L1 + partial L3/L4**. L2 is design-only. The
+"4 independent layers, each independently sufficient" framing in
+[ADR-0012](docs/adr/0012-defense-in-depth-layers.md) describes the
+**target architecture** ; v0.1 is the L1-load-bearing baseline. This is
+why the project tags v0.1.x not v1.0.0.
 
 Full honest limits in [`SECURITY.md` §"Out-of-scope"](SECURITY.md#out-of-scope-honest-limits) and the residual-risks table in [`docs/security/threat-model.md` §7](docs/security/threat-model.md).
 

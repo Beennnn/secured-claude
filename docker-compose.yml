@@ -19,7 +19,9 @@ name: secured-claude
 
 services:
   cerbos:
-    image: cerbos/cerbos:0.42.0
+    # Digest pin per ADR-0008 (no floating tags). Tag kept for human
+    # readability ; digest is the security boundary. Renovate bumps both.
+    image: cerbos/cerbos:0.42.0@sha256:4302b6ce74fec48f8842bd5fc250b4a7d416fb825e06d86d35c3794ed73182f2
     container_name: secured-claude-cerbos
     restart: unless-stopped
     user: "1001:1001"
@@ -57,11 +59,16 @@ services:
       cerbos:
         condition: service_healthy
     user: "1001:1001"
-    # NOTE: read_only=true is enabled by default in production. Keeping
-    # writable here lets `claude /resume` persist session state under
-    # /home/agent/.claude. Switch to `read_only: true` + tmpfs once the
-    # session-state volume below covers all writes.
-    read_only: false
+    # L4 hardening : read-only root FS + tmpfs for the few paths that need
+    # writes. Session state at /home/agent/.claude is on a named volume so
+    # `claude /resume` works across container restarts. /tmp and /run are
+    # tmpfs (claude + npm scratch). Anything else writing outside these
+    # paths will fail with EROFS — that's the point.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m
+      - /run:rw,nosuid,nodev,size=64m
+      - /home/agent/.cache:rw,nosuid,nodev,size=512m
     cap_drop: [ALL]
     cap_add:
       - CHOWN
