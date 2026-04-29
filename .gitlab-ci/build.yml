@@ -154,9 +154,17 @@ build:image:broker:
       [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ] \
         && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/broker:latest"
       # Build-arg : hatch-vcs needs git tags to derive the version, but
-      # the .git dir isn't in the container context. CI_COMMIT_TAG (tag)
-      # / CI_COMMIT_SHORT_SHA+container (dev / MR / main) substitutes.
-      VERSION="${CI_COMMIT_TAG:-${CI_COMMIT_SHORT_SHA}+container}"
+      # the .git dir isn't in the container context. We synthesise a
+      # PEP 440 compliant version :
+      #   * tag pipeline : strip the "v" prefix from CI_COMMIT_TAG (e.g.
+      #                    "v0.5.1" → "0.5.1")
+      #   * dev / MR / main : "0.0.0+<short-sha>" — the local-version
+      #                       segment satisfies PEP 440 + tags the SHA
+      if [ -n "${CI_COMMIT_TAG}" ]; then
+        VERSION="${CI_COMMIT_TAG#v}"
+      else
+        VERSION="0.0.0+${CI_COMMIT_SHORT_SHA}"
+      fi
     - >
       /kaniko/executor
       --context "${CI_PROJECT_DIR}"
@@ -184,7 +192,7 @@ build:image:broker:arm64:
     - |
       DESTS="--destination=${CI_REGISTRY_IMAGE}/broker:${CI_COMMIT_SHA}-arm64"
       DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/broker:${CI_COMMIT_TAG}-arm64"
-      VERSION="${CI_COMMIT_TAG}"
+      VERSION="${CI_COMMIT_TAG#v}"
     - >
       /kaniko/executor
       --context "${CI_PROJECT_DIR}"
