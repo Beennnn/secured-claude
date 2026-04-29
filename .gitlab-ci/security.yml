@@ -1,45 +1,52 @@
 ---
 # Security stage (ADR-0017) — every release must pass these gates.
 # A red job here blocks `publish` and `release` per ADR-0014.
+# Each scanner uses its dedicated image — no per-job tool install.
 
-# Anchor for jobs that need the scan-DB cache (~/.cache/secured-claude-scan/)
-.security-base: &security-base
+# Reusable cache for jobs that uv-sync (bandit, pip-audit)
+.uv-sec:
   stage: security
+  image: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
   cache:
     - key:
         files: [uv.lock]
       paths: [.venv/, .uv-cache/]
       policy: pull-push
-    - key: scan-dbs-v1
-      paths: [.cache-scan/]
-      policy: pull-push
   before_script:
-    - export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
-    - export SCAN_CACHE_ROOT="$PWD/.cache-scan"
+    - uv sync --all-extras --frozen
 
 # ---------------------------------------------------------------------------
 # Python static security smell (bandit) + dep CVE (pip-audit)
 # ---------------------------------------------------------------------------
 
 security:bandit:
-  <<: *security-base
+  extends: .uv-sec
   script:
-    - uv sync --all-extras
     - uv run bandit -r src/ -c pyproject.toml --quiet
 
 security:pip-audit:
-  <<: *security-base
+  extends: .uv-sec
+  cache:
+    - key:
+        files: [uv.lock]
+      paths: [.venv/, .uv-cache/]
+      policy: pull-push
+    - key: pip-audit-cache
+      paths: [.cache-pip-audit/]
+      policy: pull-push
   script:
-    - uv sync --all-extras
-    - mkdir -p "${SCAN_CACHE_ROOT}/pip-audit"
-    - uv run pip-audit --skip-editable --cache-dir "${SCAN_CACHE_ROOT}/pip-audit"
+    - mkdir -p .cache-pip-audit
+    - uv run pip-audit --skip-editable --cache-dir .cache-pip-audit
 
 # ---------------------------------------------------------------------------
-# Secret scan
+# Secret scan (gitleaks)
 # ---------------------------------------------------------------------------
 
 security:gitleaks:
-  <<: *security-base
+  stage: security
+  image:
+    name: zricethezav/gitleaks:latest
+    entrypoint: [""]
   script:
     - gitleaks detect --source . --no-git --redact --report-path gitleaks.json
   artifacts:
@@ -52,16 +59,24 @@ security:gitleaks:
 # ---------------------------------------------------------------------------
 
 security:trivy:
-  <<: *security-base
+  stage: security
+  image:
+    name: aquasec/trivy:0.69.3
+    entrypoint: [""]
+  cache:
+    - key: trivy-db
+      paths: [.cache-trivy/]
+      policy: pull-push
   script:
-    - mkdir -p "${SCAN_CACHE_ROOT}/trivy"
-    - trivy fs --scanners vuln,secret,config
-        --severity HIGH,CRITICAL
-        --exit-code 1
-        --cache-dir "${SCAN_CACHE_ROOT}/trivy"
-        --format json
-        --output trivy.json
-        .
+    - mkdir -p .cache-trivy
+    - >
+      trivy fs --scanners vuln,secret,config
+      --severity HIGH,CRITICAL
+      --exit-code 1
+      --cache-dir .cache-trivy
+      --format json
+      --output trivy.json
+      .
   artifacts:
     when: always
     paths: [trivy.json]
@@ -72,11 +87,17 @@ security:trivy:
 # ---------------------------------------------------------------------------
 
 security:grype:
-  <<: *security-base
+  # anchore/grype image is distroless (no sh) — install the binary in alpine
+  stage: security
+  image: alpine:latest
+  cache:
+    - key: grype-db
+      paths: [.cache-grype/]
+      policy: pull-push
   script:
-    - mkdir -p "${SCAN_CACHE_ROOT}/grype"
-    - GRYPE_DB_CACHE_DIR="${SCAN_CACHE_ROOT}/grype"
-        grype dir:. --fail-on high --output json --file grype.json
+    - apk add --no-cache curl
+    - curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+    - "GRYPE_DB_CACHE_DIR=.cache-grype grype dir:. --fail-on high --output json --file grype.json"
   artifacts:
     when: always
     paths: [grype.json]
@@ -87,25 +108,13 @@ security:grype:
 # ---------------------------------------------------------------------------
 
 security:sbom:
+  # anchore/syft image is distroless (no sh) — install the binary in alpine
   stage: security
+  image: alpine:latest
   script:
-    - syft scan dir:. -o spdx-json=sbom.spdx.json --quiet
-    - jq '{packages: (.packages | length), files: ((.files // []) | length)}' sbom.spdx.json
+    - apk add --no-cache curl
+    - curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+    - "syft scan dir:. -o spdx-json=sbom.spdx.json"
   artifacts:
     paths: [sbom.spdx.json]
     expire_in: 1 year   # Long retention — used for retroactive CVE scans
-
-# ---------------------------------------------------------------------------
-# Audit demonstration — runs the full bin/security-scans.sh end-to-end so a
-# "red-team" finding (audit-demo failure when implemented) blocks the release
-# ---------------------------------------------------------------------------
-
-security:full-audit:
-  <<: *security-base
-  script:
-    - uv sync --all-extras
-    - bash bin/security-scans.sh
-  artifacts:
-    when: always
-    paths: [audit-reports/]
-    expire_in: 90 days

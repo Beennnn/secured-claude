@@ -3,9 +3,15 @@
 
 build:python:
   stage: build
-  extends: .cache-uv
+  image: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+  cache:
+    - key:
+        files: [uv.lock]
+      paths: [.venv/, .uv-cache/]
+      policy: pull-push
+  before_script:
+    - uv sync --all-extras --frozen
   script:
-    - uv sync --all-extras
     - uv build
     - ls -la dist/
   artifacts:
@@ -14,6 +20,11 @@ build:python:
 
 build:image:
   stage: build
+  image: docker:27
+  variables:
+    # Use the runner-mounted host socket (no DinD overhead) — see
+    # docs/dev/developer-environment.md §"GitLab CI runner setup"
+    DOCKER_HOST: "unix:///var/run/docker.sock"
   rules:
     - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

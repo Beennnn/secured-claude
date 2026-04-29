@@ -82,40 +82,77 @@ To enable them, edit your `~/.claude/settings.json` or your
 plugin marketplace config. Per the Claude Code MCP docs :
 <https://docs.claude.com/en/docs/claude-code/mcp>
 
-## GitLab CI runner setup (one-time per dev machine)
+## GitLab CI runner setup
 
 The CI pipeline uses `tags: [macbook-local]` (per CLAUDE.md global "use
-local runners ; never rely on GitLab SaaS quota"). The macbook-local
-runner is registered at the **iris-7 group level** for the original Iris
-projects.
+local runners ; never rely on GitLab SaaS quota"). On 2026-04-29 we
+registered a **project-specific** runner alongside the existing iris-7
+group runner — the gitlab-runner daemon is the same Docker container
+(`gitlab/gitlab-runner:latest`) and serves both via separate
+`[[runners]]` blocks in `/etc/gitlab-runner/config.toml`.
 
-To enable CI for `benoit.besson/secured-claude` (which lives outside the
-iris-7 group), the runner must be either :
+### How it was done (reproducible) — for future siblings
 
-1. **Re-registered as a project-specific runner** for
-   `benoit.besson/secured-claude` :
-   ```bash
-   # Get a registration token from
-   #   https://gitlab.com/benoit.besson/secured-claude/-/settings/ci_cd → Runners
-   # Then on the macbook :
-   gitlab-runner register \
-     --url https://gitlab.com \
-     --token <project-runner-registration-token> \
-     --executor shell \
-     --description "macbook-local (secured-claude)" \
-     --tag-list "macbook-local"
-   ```
+```bash
+# 1. Create a project-scoped runner via the API (returns a glrt-... token,
+#    valid once for `gitlab-runner register`)
+TOKEN=$(echo -e 'protocol=https\nhost=gitlab.com\n' \
+  | glab auth git-credential get | grep '^password=' | cut -d= -f2-)
+PROJECT_ID=81740556
+curl -sS -X POST "https://gitlab.com/api/v4/user/runners" \
+  -H "PRIVATE-TOKEN: $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"runner_type\":\"project_type\",\"project_id\":${PROJECT_ID},
+       \"description\":\"macbook-local (secured-claude)\",
+       \"tag_list\":[\"macbook-local\"],\"run_untagged\":false}"
+# → { "id": ..., "token": "glrt-..." }
 
-2. **Or moved to the user's namespace at the runner level** — promote the
-   runner from group-scope to user-scope so it serves all projects under
-   `benoit.besson/`.
+# 2. Register inside the existing gitlab-runner container (auto-appends a
+#    new [[runners]] block to the volume-mounted config.toml)
+docker exec gitlab-runner gitlab-runner register \
+  --non-interactive \
+  --url https://gitlab.com \
+  --token "<the glrt-... token from step 1>" \
+  --executor docker \
+  --docker-image "python:3.13-slim" \
+  --docker-privileged=false \
+  --docker-volumes "/var/run/docker.sock:/var/run/docker.sock" \
+  --docker-volumes "/cache" \
+  --description "macbook-local (secured-claude)"
 
-3. **Or accept SaaS runners** — replace `tags: [macbook-local]` with
-   `tags: [saas-linux-medium-amd64]` (paid, billed per minute). Not
-   recommended per CLAUDE.md global.
+# 3. Restart the daemon so it picks up the new section (auto-reloads
+#    on most Docker versions, restart is belt-and-braces)
+docker restart gitlab-runner
 
-Until one of (1)/(2) is done, pipeline runs will queue indefinitely
-waiting for a matching runner.
+# 4. Verify online
+glab api "projects/${PROJECT_PATH//\//%2F}/runners" \
+  | python3 -c "import json,sys,re; t=sys.stdin.read(); m=re.search(r'\\[.*\\]', t, re.S); d=json.loads(m.group(0) if m else t); [print(f'{r[\"description\"]}: {r[\"status\"]}') for r in d]"
+# → "macbook-local (secured-claude): online"
+```
+
+### Why we couldn't just attach the iris-7 group runner
+
+`POST /projects/<id>/runners` with `runner_id=<group-runner-id>` returns
+HTTP 403 *"Runner is a group runner"* — GitLab forbids cross-namespace
+attachment of group-level runners. The `POST /user/runners` route with
+`runner_type=project_type` is the correct pattern.
+
+### Default per-job image strategy
+
+The default registration above sets `--docker-image python:3.13-slim`
+but our `.gitlab-ci/*.yml` overrides this **per job** so each job runs
+in an image already containing its tool — see ADR-0017 §"Caching".
+Examples :
+
+| Stage    | Image                                                      |
+|----------|------------------------------------------------------------|
+| lint:ruff/mypy/test:* | `ghcr.io/astral-sh/uv:python3.13-bookworm-slim` |
+| lint:hadolint | `hadolint/hadolint:latest-debian` (entrypoint override) |
+| lint:shellcheck | `koalaman/shellcheck-alpine:stable`            |
+| lint:cerbos-compile | `docker:27` + `services: docker:27-dind` (cerbos image is distroless, no shell — DinD lets us `docker run` it) |
+| lint:commits | `alpine/git:latest`                                  |
+| security:gitleaks/trivy/grype/sbom | dedicated tool images   |
+| build:image | `docker:27` + `docker:27-dind` for buildx multi-arch  |
+| publish:cosign-sign | `gcr.io/projectsigstore/cosign:v2.4.1`        |
 
 ## Workflow
 

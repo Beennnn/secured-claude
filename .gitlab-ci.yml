@@ -26,9 +26,6 @@ default:
     - macbook-local           # Apple Silicon arm64 runner (per CLAUDE.md global)
   interruptible: true
   timeout: 30 minutes
-  before_script:
-    - export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
-    - export UV_LINK_MODE=copy
 
 # ---------------------------------------------------------------------------
 # Cache hidden jobs — referenced via `extends:` from job definitions in
