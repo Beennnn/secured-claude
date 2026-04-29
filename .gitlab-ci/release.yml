@@ -2,8 +2,14 @@
 # Release stage — GitLab Release on tags, with assets.
 
 release:gitlab:
+  # release-cli 0.24.0 SIGSEGVs on every CreateRelease call (upstream
+  # bug, reproducible with the simplest possible invocation). Bypassing
+  # by calling the GitLab Releases API directly via curl + jq —
+  # POST /projects/:id/releases body : {name, tag_name, description}.
+  # If release-cli ships a fix, we can switch back ; the API call is
+  # equivalent semantically.
   stage: release
-  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  image: alpine:latest
   rules:
     - if: $CI_COMMIT_TAG
   needs: [publish:pypi, publish:cosign-sign, security:sbom]
@@ -50,15 +56,28 @@ release:gitlab:
 
       ADR-0017 details the pipeline. SECURITY.md describes the threat model.
       EOF
-    # release-cli 0.24.0 SIGSEGV on --assets-link (upstream bug under
-    # investigation). For v0.1, we ship the Release object with description
-    # only ; the SBOM/wheel/cosign signature remain reachable via :
-    #   - GitLab Container Registry (image:vTAG, signed in Sigstore tlog)
-    #   - GitLab Package Registry (wheel for version 0.1.0)
-    #   - CI artifact endpoints linked from each successful job's page
-    # Asset-link wiring tracked for v0.2.
-    - >
-      release-cli create
-      --name "secured-claude ${CI_COMMIT_TAG}"
-      --description "$(cat release-description.md)"
-      --tag-name "${CI_COMMIT_TAG}"
+    - apk add --no-cache curl jq
+    # POST to /projects/:id/releases with the description as JSON body.
+    # CI_JOB_TOKEN works for the Releases API on a tag pipeline.
+    # If the release already exists (re-run on the same tag), the API
+    # returns 409 Conflict ; we treat it as success for idempotency.
+    - |
+      desc=$(cat release-description.md)
+      payload=$(jq -n \
+        --arg name "secured-claude ${CI_COMMIT_TAG}" \
+        --arg tag "${CI_COMMIT_TAG}" \
+        --arg desc "$desc" \
+        '{name: $name, tag_name: $tag, description: $desc}')
+      http_code=$(curl -sS -o /tmp/resp.json -w "%{http_code}" \
+        -X POST \
+        -H "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases")
+      echo "POST /releases → HTTP $http_code"
+      cat /tmp/resp.json | head -100
+      case "$http_code" in
+        201) echo "✓ Release ${CI_COMMIT_TAG} created" ;;
+        409) echo "✓ Release ${CI_COMMIT_TAG} already exists (idempotent re-run)" ;;
+        *)   echo "✗ unexpected HTTP $http_code"; exit 1 ;;
+      esac
