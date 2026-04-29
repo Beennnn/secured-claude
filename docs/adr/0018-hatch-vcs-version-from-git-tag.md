@@ -30,7 +30,9 @@ Adopt **hatch-vcs** to derive the package version from the latest reachable git 
 
 Each tag produces a **unique wheel filename**. The publish:pypi shell-wrap shim is removed ; plain `twine upload dist/*` is now intrinsically idempotent across re-tags (a re-tag of the same SHA produces the same filename, which the registry refuses with a 400 — but a NEW tag always uploads cleanly).
 
-`__version__` in `secured_claude/__init__.py` reads from the auto-generated `_version.py` (gitignored, written by hatch-vcs at build time), with a fallback to `0.0.0+unknown` for development checkouts that haven't been built.
+`__version__` in `secured_claude/__init__.py` is read at import time via `importlib.metadata.version("secured-claude")` — that's the standard PEP 566 / PEP 621 way and works regardless of whether the package was installed from a wheel, an editable install, or as a developer checkout. Falls back to `0.0.0+unknown` if the package isn't installed (a raw `python -c "import secured_claude"` from a `git clone` without `uv sync`).
+
+We initially configured a `[tool.hatch.build.hooks.vcs] version-file = "src/secured_claude/_version.py"` directive to write a `_version.py` at build time, but `importlib.metadata` is simpler (no auto-generated source file to lint-exclude or gitignore) so the file-write hook was dropped before v0.2.0.
 
 `raw-options` configure setuptools_scm-compatible behaviour :
 - `version_scheme = "guess-next-dev"` — untagged commits get a `.devN` suffix, never collide with the previous tag's version.

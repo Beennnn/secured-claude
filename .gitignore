@@ -3,9 +3,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
-
-# hatch-vcs auto-generated version file
-src/secured_claude/_version.py
 build/
 dist/
 *.egg-info/
