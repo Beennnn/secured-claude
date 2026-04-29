@@ -96,10 +96,10 @@ def test_map_webfetch_extracts_host_and_scheme() -> None:
 
 
 def test_map_mcp_tool_parses_server_and_tool() -> None:
-    kind, _rid, action, attr = map_tool_to_resource("mcp__mirador-java__get_health", {})
+    kind, _rid, action, attr = map_tool_to_resource("mcp__iris-service-java__get_health", {})
     assert kind == "mcp_tool"
     assert action == "invoke"
-    assert attr["server"] == "mirador-java"
+    assert attr["server"] == "iris-service-java"
     assert attr["tool"] == "get_health"
 
 

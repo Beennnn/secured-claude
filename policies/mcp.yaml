@@ -7,7 +7,7 @@
 #   in the allowlist below
 #
 # Resource attributes the broker provides:
-# - request.resource.attr.server — the MCP server identifier (e.g. "mirador-java")
+# - request.resource.attr.server — the MCP server identifier (e.g. "iris-service-java")
 # - request.resource.attr.tool — the tool name (e.g. "get_health")
 # - request.resource.attr.input — JSON of the tool input (for argument-level review)
 #
@@ -31,7 +31,7 @@ resourcePolicy:
     # explicitly add the servers they trust here, paired with the tools
     # they want to expose. This forces a deliberate decision per server.
     #
-    # Example (uncomment to enable mirador-java MCP read-only operations):
+    # Example (uncomment to enable iris-service-java MCP read-only operations):
     #
     # - actions: ["invoke"]
     #   effect: EFFECT_ALLOW
@@ -40,7 +40,7 @@ resourcePolicy:
     #     match:
     #       all:
     #         of:
-    #           - expr: request.resource.attr.server == "mirador-java"
+    #           - expr: request.resource.attr.server == "iris-service-java"
     #           - expr: |
     #               request.resource.attr.tool in [
     #                 "get_health",
