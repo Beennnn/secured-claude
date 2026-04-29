@@ -35,11 +35,22 @@ cleanup() {
 trap cleanup EXIT
 
 echo "===== boot full stack (cerbos + sidecars + broker + agent) ====="
-docker compose "${COMPOSE_ARGS[@]}" up -d --build broker dns-filter egress-proxy >/dev/null 2>&1 || {
+# `--build` is intentionally absent : in CI we want to PULL the registry-
+# pushed image (matches the supply-chain claim of the cosign-signed bytes).
+# Locally without registry access, the compose `build:` directive provides
+# fallback. Set SECURED_CLAUDE_LOCAL_BUILD=1 to force a rebuild in dev.
+COMPOSE_UP_ARGS=()
+if [ -n "${SECURED_CLAUDE_LOCAL_BUILD:-}" ]; then
+    COMPOSE_UP_ARGS+=(--build)
+fi
+if ! docker compose "${COMPOSE_ARGS[@]}" up -d \
+    "${COMPOSE_UP_ARGS[@]}" \
+    broker dns-filter egress-proxy 2>&1 | tee /tmp/full-stack-logs.txt; then
     echo "FATAL: docker compose up failed" >&2
-    docker compose "${COMPOSE_ARGS[@]}" logs broker dns-filter egress-proxy 2>&1 | tail -50 >&2
+    docker compose "${COMPOSE_ARGS[@]}" ps 2>&1 | tail -10 >&2 || true
+    docker compose "${COMPOSE_ARGS[@]}" logs broker dns-filter egress-proxy 2>&1 | tail -50 >&2 || true
     exit 1
-}
+fi
 
 echo "===== wait for broker /health ====="
 for i in $(seq 1 60); do
