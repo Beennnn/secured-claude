@@ -381,6 +381,96 @@ def cmd_policy_lint(args: argparse.Namespace) -> int:
     return proc.returncode
 
 
+def cmd_principal_validate(args: argparse.Namespace) -> int:
+    """Validate config/principals.yaml schema (ADR-0031).
+
+    Loads the principal directory + walks each entry, reporting any whose
+    `roles` isn't a list-of-strings or `attributes` isn't a dict. Catches
+    typos like `atributes:` (missing 't') or `role:` (singular) that would
+    otherwise silently fall back to the default principal.
+
+    Exit codes :
+      0 — file valid, all entries well-formed (or file missing — fallback OK)
+      1 — at least one entry malformed (file path + key + reason in stdout)
+      2 — file unreadable / not YAML
+    """
+    import os
+    from pathlib import Path
+
+    import yaml
+
+    console = Console()
+    path_arg = args.path or os.environ.get("SECURED_CLAUDE_PRINCIPALS")
+    path = Path(path_arg) if path_arg else Path("config/principals.yaml")
+    if not path.exists():
+        msg = (
+            f"[yellow]principals file {path} not found — "
+            "broker uses single-default fallback[/yellow]"
+        )
+        console.print(msg)
+        return 0
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as e:
+        console.print(f"[red]✗ {path} is malformed YAML: {e}[/red]")
+        return 2
+    if not isinstance(data, dict):
+        console.print(
+            f"[red]✗ {path} top-level must be a YAML mapping (got {type(data).__name__})[/red]"
+        )
+        return 1
+    raw = data.get("principals")
+    if not isinstance(raw, dict):
+        console.print(
+            f"[red]✗ {path} missing or malformed `principals:` key[/red] "
+            "— broker would use single-default fallback"
+        )
+        return 1
+    issues: list[str] = []
+    for pid, entry in raw.items():
+        if not isinstance(entry, dict):
+            issues.append(f"  • {pid!r}: entry must be a mapping (got {type(entry).__name__})")
+            continue
+        roles = entry.get("roles")
+        attributes = entry.get("attributes")
+        if not isinstance(roles, list):
+            issues.append(
+                f"  • {pid!r}.roles: must be a list of strings "
+                f"(got {type(roles).__name__ if roles is not None else 'missing'})"
+            )
+        elif not all(isinstance(r, str) for r in roles):
+            issues.append(f"  • {pid!r}.roles: every element must be a string")
+        if attributes is not None and not isinstance(attributes, dict):
+            issues.append(
+                f"  • {pid!r}.attributes: must be a mapping (got {type(attributes).__name__})"
+            )
+        # Catch common typos : `role:` singular, `atributes:` (missing t),
+        # `attribute:` (missing s) — they wouldn't fail the type checks
+        # above because they're entirely separate keys, but they leak the
+        # operator's intent.
+        for typo in ("role", "atribute", "atributes", "attribute"):
+            if typo in entry:
+                issues.append(
+                    f"  • {pid!r}: unknown key {typo!r} — did you mean "
+                    f"{'roles' if typo == 'role' else 'attributes'}?"
+                )
+    if issues:
+        console.print(f"[red]✗ {path} has {len(issues)} validation issue(s):[/red]")
+        for issue in issues:
+            console.print(issue)
+        return 1
+    n = len(raw)
+    console.print(f"[green]✓ {path} valid — {n} principal(s) defined[/green]")
+    for pid, entry in raw.items():
+        roles_summary = "+".join(entry.get("roles") or [])
+        attrs_summary = ", ".join(f"{k}={v}" for k, v in (entry.get("attributes") or {}).items())
+        # `print` not console.print to bypass Rich's [...] markup parsing —
+        # the role list contains literal square brackets that Rich would
+        # otherwise consume as style tags.
+        print(f"  {pid}: roles=[{roles_summary}] attrs={{{attrs_summary}}}")
+    return 0
+
+
 def cmd_policy_stats(args: argparse.Namespace) -> int:
     """Show the most-frequently approved (resource_kind, action) tuples."""
     store = Store()
@@ -491,6 +581,25 @@ def build_parser() -> argparse.ArgumentParser:
     psub.add_parser("stats", help="top-N approved (resource_kind, action) tuples").set_defaults(
         func=cmd_policy_stats
     )
+
+    p_principal = sub.add_parser(
+        "principal",
+        help="principal directory operations (ADR-0027 / ADR-0031)",
+    )
+    pripsub = p_principal.add_subparsers(dest="principal_cmd", required=True)
+    p_principal_validate = pripsub.add_parser(
+        "validate",
+        help="validate config/principals.yaml schema (catches typos, missing fields)",
+    )
+    p_principal_validate.add_argument(
+        "--path",
+        default=None,
+        help=(
+            "path to principals.yaml "
+            "(default : SECURED_CLAUDE_PRINCIPALS env or config/principals.yaml)"
+        ),
+    )
+    p_principal_validate.set_defaults(func=cmd_principal_validate)
 
     return parser
 
