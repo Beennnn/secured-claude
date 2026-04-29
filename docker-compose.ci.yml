@@ -27,9 +27,13 @@ services:
       args:
         # SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SECURED_CLAUDE — hatch-vcs
         # can't read git inside the container ; we synthesise the version
-        # from CI env or the local "0.5.0+container" default.
-        SECURED_CLAUDE_VERSION: ${SECURED_CLAUDE_VERSION:-0.5.0+container}
-    image: secured-claude/broker:0.5.0
+        # from CI env or the local default.
+        SECURED_CLAUDE_VERSION: ${SECURED_CLAUDE_VERSION:-0.5.1+container}
+    # In CI, ${CI_REGISTRY_IMAGE} + ${CI_COMMIT_SHA} resolve to the registry-
+    # pushed image so smoke:full-stack pulls instead of rebuilding. Locally,
+    # those vars are unset → fallback to `secured-claude/broker:0.5.1` and
+    # the `build:` directive above kicks in for missing-image fallback.
+    image: ${CI_REGISTRY_IMAGE:-secured-claude}/broker:${CI_COMMIT_SHA:-0.5.1}
     container_name: secured-claude-broker
     restart: unless-stopped
     user: "1001:1001"

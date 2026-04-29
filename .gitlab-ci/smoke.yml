@@ -66,6 +66,49 @@ smoke:runtime:
     - echo "✓ runtime smoke — all 3 images boot cleanly, hook wired correctly"
 
 # ---------------------------------------------------------------------------
+# Full-stack smoke (ADR-0033) — boots the 5-container stack via
+# docker-compose.yml + docker-compose.ci.yml + runs bin/test-full-stack.sh.
+# Proves the agent → hook → broker → Cerbos → audit log path end-to-end.
+# Tag-only because the broker image is registry-pushed only on tag pipelines
+# (the manifest combiner runs on tag, the per-SHA tag is amd64-only on
+# main/dev). v0.6 ticket : extend smoke to dev pipelines once the broker
+# is available at :${SHA} on every push.
+# ---------------------------------------------------------------------------
+
+smoke:full-stack:
+  stage: smoke
+  image: docker:24-cli
+  rules:
+    - if: $CI_COMMIT_TAG
+  needs:
+    - build:image
+    - build:image:dns-filter
+    - build:image:egress-proxy
+    - build:image:broker
+    - build:image:manifest
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+  before_script:
+    # bin/test-full-stack.sh requires bash + git + docker-compose-cli.
+    # docker:24-cli alpine has docker but not bash or git ; install them.
+    - apk add --no-cache bash git docker-cli-compose
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    # docker-compose.ci.yml uses ${CI_REGISTRY_IMAGE}/broker:${CI_COMMIT_SHA}
+    # for the broker `image:`, so compose `up` pulls from the registry
+    # instead of rebuilding. Set the env so the variable substitution
+    # resolves at compose-eval time.
+    - export CI_REGISTRY_IMAGE
+    - export CI_COMMIT_SHA
+    - bash bin/test-full-stack.sh
+  artifacts:
+    when: on_failure
+    paths:
+      # Container logs on failure for debugging.
+      - /tmp/full-stack-logs.txt
+    expire_in: 7 days
+
+# ---------------------------------------------------------------------------
 # Real-LLM smoke (ADR-0030) — MANUAL-TRIGGER ONLY.
 #
 # Burns Anthropic API budget (~$0.01 per run) so we never auto-run it.
