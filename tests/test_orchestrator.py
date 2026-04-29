@@ -25,6 +25,20 @@ def compose_file(tmp_path: Path) -> Path:
     return p
 
 
+@pytest.fixture(autouse=True)
+def _fake_docker_on_path(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+    """Pretend docker is on PATH so unit tests don't depend on the CI image
+    having it. The single test that exercises the absence is
+    `test_docker_not_installed_raises`, which monkeypatches shutil.which itself
+    after this autouse fixture installs the default fake — its later patch wins.
+    """
+    if request.node.name == "test_docker_not_installed_raises":
+        return
+    monkeypatch.setattr(
+        "secured_claude.orchestrator.shutil.which", lambda _name: "/usr/bin/docker"
+    )
+
+
 def _ok_proc(stdout: str = "") -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
 
