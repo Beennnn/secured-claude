@@ -7,7 +7,7 @@
 
 test:py313:
   stage: test
-  <<: *cache-uv-incremental
+  extends: .cache-uv-incremental
   script:
     - uv sync --all-extras --python 3.13
     - uv run pytest tests/ --cov=src/secured_claude --cov-report=xml --cov-report=term -m "not audit"
@@ -28,7 +28,7 @@ test:py313:
 
 test:py311:
   stage: test
-  <<: *cache-uv-incremental
+  extends: .cache-uv-incremental
   script:
     - uv sync --all-extras --python 3.11
     - uv run pytest tests/ -m "not audit" -q
@@ -39,7 +39,7 @@ test:py311:
 
 test:py312:
   stage: test
-  <<: *cache-uv-incremental
+  extends: .cache-uv-incremental
   script:
     - uv sync --all-extras --python 3.12
     - uv run pytest tests/ -m "not audit" -q

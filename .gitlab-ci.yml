@@ -31,45 +31,29 @@ default:
     - export UV_LINK_MODE=copy
 
 # ---------------------------------------------------------------------------
-# Cache anchors — referenced by every job that needs them.
+# Cache hidden jobs — referenced via `extends:` from job definitions in
+# .gitlab-ci/*.yml. We use hidden jobs (the `.foo:` form) instead of YAML
+# anchors because YAML anchors do NOT cross `include:` boundaries in GitLab
+# CI ; `extends:` does. Pattern borrowed from iris-service-python.
 #
 # Cache strategy (ADR-0017 §"Caching") :
 #   * uv-lock cache : .venv/ + uv-managed cache. Key tied to uv.lock so any
 #     dep change triggers a fresh install (correct), but identical dep sets
 #     reuse the venv (fast).
-#   * scan cache : ~/.cache/secured-claude-scan/ for grype, trivy, pip-audit
-#     vulnerability DBs. Refresh cadence ~daily (the scanners themselves
-#     check for newer DBs and pull only the delta).
-#   * mypy cache, ruff cache : in-repo, gitignored. Tied to source tree.
+#   * scan cache : .cache-scan/ for grype, trivy, pip-audit vulnerability
+#     DBs. Refresh cadence ~daily (scanners check for newer DBs themselves).
+#   * incremental cache : .ruff_cache/ .mypy_cache/ .pytest_cache/. Keyed by
+#     branch slug so a long-lived branch reuses its incremental state.
 # ---------------------------------------------------------------------------
 
-.cache-uv: &cache-uv
+.cache-uv:
   cache:
     - key:
         files: [uv.lock]
-      paths:
-        - .venv/
-        - .uv-cache/
+      paths: [.venv/, .uv-cache/]
       policy: pull-push
 
-.cache-scan-dbs: &cache-scan-dbs
-  cache:
-    - key: scan-dbs-v1
-      paths:
-        - .cache-scan/
-      policy: pull-push
-
-.cache-incremental: &cache-incremental
-  cache:
-    - key: incremental-${CI_COMMIT_REF_SLUG}
-      paths:
-        - .ruff_cache/
-        - .mypy_cache/
-        - .pytest_cache/
-      policy: pull-push
-
-# Aggregate when a job needs both deps and incremental
-.cache-uv-incremental: &cache-uv-incremental
+.cache-uv-incremental:
   cache:
     - key:
         files: [uv.lock]
@@ -77,6 +61,16 @@ default:
       policy: pull-push
     - key: incremental-${CI_COMMIT_REF_SLUG}
       paths: [.ruff_cache/, .mypy_cache/, .pytest_cache/]
+      policy: pull-push
+
+.cache-scan-dbs:
+  cache:
+    - key:
+        files: [uv.lock]
+      paths: [.venv/, .uv-cache/]
+      policy: pull-push
+    - key: scan-dbs-v1
+      paths: [.cache-scan/]
       policy: pull-push
 
 # ---------------------------------------------------------------------------

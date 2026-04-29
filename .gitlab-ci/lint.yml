@@ -8,7 +8,7 @@
 
 lint:ruff:
   stage: lint
-  <<: *cache-uv-incremental
+  extends: .cache-uv-incremental
   script:
     - uv sync --all-extras
     - uv run ruff check src/ tests/
@@ -20,7 +20,7 @@ lint:ruff:
 
 lint:mypy:
   stage: lint
-  <<: *cache-uv-incremental
+  extends: .cache-uv-incremental
   script:
     - uv sync --all-extras
     - uv run mypy src/

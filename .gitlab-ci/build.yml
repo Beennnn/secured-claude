@@ -3,7 +3,7 @@
 
 build:python:
   stage: build
-  <<: *cache-uv
+  extends: .cache-uv
   script:
     - uv sync --all-extras
     - uv build
