@@ -18,6 +18,11 @@ lint:ruff:
       paths: [.ruff_cache/]
       policy: pull-push
   before_script:
+    # hatch-vcs (ADR-0018) reads the version from the latest git tag.
+    # uv:python3.13-bookworm-slim doesn't bundle git ; install it so
+    # `uv sync` (which installs the project editably) doesn't choke.
+    - apt-get update -qq && apt-get install -y --no-install-recommends git
+    - git fetch --tags --depth=100 || true
     - uv sync --all-extras --frozen
   script:
     - uv run ruff check src/ tests/
@@ -39,6 +44,9 @@ lint:mypy:
       paths: [.mypy_cache/]
       policy: pull-push
   before_script:
+    # See lint:ruff — hatch-vcs needs git in the slim base.
+    - apt-get update -qq && apt-get install -y --no-install-recommends git
+    - git fetch --tags --depth=100 || true
     - uv sync --all-extras --frozen
   script:
     - uv run mypy src/

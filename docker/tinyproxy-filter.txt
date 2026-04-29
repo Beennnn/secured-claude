@@ -1,0 +1,17 @@
+# L2 egress allowlist — ADR-0019
+#
+# Hostnames on this list are the ONLY destinations the agent's HTTPS
+# CONNECT can tunnel to. Anything else returns 403 Forbidden from the
+# proxy, even if Cerbos (L1) somehow allowed the intent and DNS
+# (L3 dns-filter) somehow resolved the name.
+#
+# Format : one regex per line, matched against the CONNECT host header.
+# tinyproxy uses extended regex (FilterExtended On in tinyproxy.conf).
+#
+# Don't add domains here without a documented review — every entry is a
+# new exfil channel for a compromised agent. The "secured by design"
+# promise is that this list stays minimal.
+
+# Anthropic API — Claude Code's only legitimate egress.
+^api\.anthropic\.com$
+^.*\.anthropic\.com$

@@ -27,7 +27,10 @@ def test_version_subcommand_prints_version(capsys: pytest.CaptureFixture[str]) -
     assert rc == 0
     captured = capsys.readouterr()
     assert "secured-claude" in captured.out
-    assert "0.1.0" in captured.out
+    # Version is hatch-vcs-derived (ADR-0018) — assert format, not literal value.
+    import secured_claude
+
+    assert secured_claude.__version__ in captured.out
 
 
 def test_up_calls_orchestrator_up() -> None:

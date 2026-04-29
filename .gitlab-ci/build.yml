@@ -10,6 +10,13 @@ build:python:
       paths: [.venv/, .uv-cache/]
       policy: pull-push
   before_script:
+    # hatch-vcs reads the package version from the latest git tag (ADR-0018).
+    # The bookworm-slim image doesn't bundle git ; install it so `uv build`
+    # can resolve the version. The Kaniko build:image job uses a different
+    # base and doesn't need this.
+    - apt-get update -qq && apt-get install -y --no-install-recommends git
+    # GitLab clones with depth=20 by default — ensure the tag is reachable.
+    - git fetch --tags --depth=100 || true
     - uv sync --all-extras --frozen
   script:
     - uv build
@@ -23,8 +30,19 @@ build:image:
   # /var/run/docker.sock works for `docker login` but `docker build` /
   # `buildx` consistently fail to dial the daemon (vpnkit proxy quirk on
   # Mac Docker Desktop). Kaniko builds the image without a Docker daemon
-  # and pushes to the registry directly. Tracked v0.2 for true multi-arch
-  # via Kaniko + remote builder or buildx DinD.
+  # and pushes to the registry directly.
+  #
+  # `--customPlatform=linux/amd64` pins the resulting image to amd64
+  # regardless of the runner's native arch (the macbook-local runner is
+  # arm64 — Apple Silicon — so without this flag v0.1.8 shipped as
+  # architecture=arm64 only, which broke amd64 users with `exec format
+  # error` unless they ran QEMU). amd64 is the larger enterprise base.
+  # arm64 users (Apple Silicon, AWS Graviton) currently fall back to
+  # QEMU emulation under Docker Desktop / containerd binfmt_misc.
+  # True multi-arch (manifest list with both linux/amd64 + linux/arm64)
+  # is tracked for v0.3 — needs two Kaniko jobs + crane index append
+  # to combine, see the v0.2 README "configured but NOT yet enforced"
+  # table.
   stage: build
   image:
     name: gcr.io/kaniko-project/executor:v1.23.2-debug
@@ -48,6 +66,7 @@ build:image:
       /kaniko/executor
       --context "${CI_PROJECT_DIR}"
       --dockerfile "${CI_PROJECT_DIR}/Dockerfile.claude-code"
+      --customPlatform=linux/amd64
       ${DESTS}
       --cache=true
       --cache-ttl=24h

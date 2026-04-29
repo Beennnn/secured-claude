@@ -14,34 +14,23 @@ publish:pypi:
       paths: [.venv/, .uv-cache/]
       policy: pull-push
   before_script:
+    # hatch-vcs (ADR-0018) needs git in the slim base.
+    - apt-get update -qq && apt-get install -y --no-install-recommends git
+    - git fetch --tags --depth=100 || true
     - uv sync --all-extras --frozen
   script:
     - uv run python -m pip install --quiet twine
-    # GitLab Package Registry rejects `twine upload --skip-existing` with
-    # UnsupportedConfiguration. Until pyproject.toml gets a dynamic version
-    # (hatch-vcs in v0.2 — read from git tag), each v0.1.x tag tries to
-    # re-upload the same `secured_claude-0.1.0-...whl` filename, which
-    # GitLab refuses with 400 Bad Request. We treat that specific error
-    # as success so the publish stage stays idempotent across re-tags.
-    # Any other twine failure still fails the job.
-    - |
-      set +e
-      uv run twine upload \
-        --repository-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi" \
-        -u gitlab-ci-token -p "${CI_JOB_TOKEN}" \
-        dist/* 2>&1 | tee /tmp/twine.log
-      rc=${PIPESTATUS[0]}
-      set -e
-      if [ "$rc" -eq 0 ]; then
-        echo "✓ wheel uploaded"
-        exit 0
-      fi
-      if grep -qiE "400 Bad Request|already exists|file with that name" /tmp/twine.log; then
-        echo "✓ wheel already published (idempotent re-tag) — treating as success"
-        exit 0
-      fi
-      echo "✗ twine failed with unrecoverable error (rc=$rc)" >&2
-      exit "$rc"
+    # hatch-vcs (ADR-0018) makes each tag produce a unique wheel filename
+    # (secured_claude-X.Y.Z-py3-none-any.whl), so plain twine upload is
+    # idempotent without shell-wrap : a re-tag produces a same-named wheel
+    # that GitLab rejects with 400 Bad Request, but a NEW tag (X.Y.Z+1)
+    # always uploads cleanly. The 400-Bad-Request shell-wrap shim from
+    # v0.1.x is no longer needed.
+    - >
+      uv run twine upload
+      --repository-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi"
+      -u gitlab-ci-token -p "${CI_JOB_TOKEN}"
+      dist/*
 
 publish:cosign-sign:
   # gcr.io/projectsigstore/cosign image is distroless (no sh), so GitLab CI

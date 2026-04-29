@@ -16,7 +16,7 @@
 <p align="center"><b>The comfort of Claude Code, secured by design.</b></p>
 
 <p align="center">
-  <a href="https://gitlab.com/secured-claude/secured-claude/-/pipelines"><img src="https://gitlab.com/secured-claude/secured-claude/badges/main/pipeline.svg" alt="pipeline"></a>
+  <a href="https://gitlab.com/benoit.besson/secured-claude/-/pipelines"><img src="https://gitlab.com/benoit.besson/secured-claude/badges/main/pipeline.svg" alt="pipeline"></a>
   <a href="docs/SECURITY.md"><img src="https://img.shields.io/badge/security--audit-pass-brightgreen" alt="security audit"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="python"></a>
@@ -80,20 +80,18 @@ secured-claude audit --denied
 ### What is configured but NOT yet enforced — be explicit
 
 A senior security reviewer should read this table before trusting any
-"defense-in-depth" claim. v0.1.x ships a credible **prototype** with a
-working policy gate ; **L2 (network egress allowlist) is designed but
-NOT enforced at the kernel level**, and a few other items are documented
-ahead of being live.
+"defense-in-depth" claim. v0.2.x ships **L1 + L2 + L3-DNS enforced**
+(L2 closed via tinyproxy egress sidecar in [ADR-0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md),
+DNS leak closed via dnsmasq in [ADR-0020](docs/adr/0020-l3-dns-allowlist-dnsmasq.md)).
+The remaining gaps below are documented ahead of being live.
 
-| Item | v0.1 reality | When it goes live |
+| Item | v0.2 reality | When it goes live |
 |---|---|---|
-| **L2 — Network egress allowlist** | The `secured-claude-net` Docker bridge currently allows all egress. ADR-0010 specifies iptables (Linux) / sidecar HTTP proxy (cross-platform) ; **neither is implemented yet**. The hook (L1) is the only thing today preventing `WebFetch evil.com` ; a malicious post-install script in an approved `npm install` would not be blocked at the network layer. | v0.2 — sidecar HTTP allowlisting proxy + DNS filter |
-| **Cosign keyless OIDC signature** on container image | Pipeline job exists (`publish:cosign-sign`) ; v0.1.1 release pipeline failed at `build:image` (buildx daemon access on Mac runner) so cosign was skipped. The wheel IS in GitLab Package Registry but the image is not signed yet. | v0.1.2 — `build:image` simplified to single-arch + `docker build` ; cosign chain re-validates on next tag |
-| **GitLab Release with auto-attached SBOM + wheel + sig** | `release:gitlab` job exists ; same skip as above on v0.1.1 | v0.1.2 |
-| **Audit log tamper-evidence at FS layer** | App + SQLite trigger refuse `UPDATE`/`DELETE` on `approvals` (tested). But a `rm approvals.db` from another process succeeds — the log is not tamper-EVIDENT, just append-only at the SQL boundary. | v0.2 — hash-chain entries (each row's hash includes previous), optional SIEM JSONL forward |
-| **Multi-principal Cerbos roles** | `derived_roles.yaml` defines them ; broker hardcodes single principal `claude-code-default` | v0.2 |
-| **DNS allowlist** (mitigates R-DNS-LEAK residual risk) | Documented in threat-model.md ; not implemented | v0.2 |
-| **Runtime smoke in CI** (real claude binary call) | Recipe exists (`secured-claude up && claude -p ...`), runs locally pre-tag ; not yet a CI job | v0.2 — uses a test API key in a GitLab CI variable |
+| **Audit log tamper-evidence at FS layer** | App + SQLite trigger refuse `UPDATE`/`DELETE` on `approvals` (tested). But a `rm approvals.db` from another process succeeds — the log is not tamper-EVIDENT, just append-only at the SQL boundary. | v0.3 — hash-chain entries (each row's hash includes previous), optional SIEM JSONL forward |
+| **Multi-principal Cerbos roles** | `derived_roles.yaml` defines them ; broker hardcodes single principal `claude-code-default` | v0.3 |
+| **Runtime smoke in CI** (real claude binary call) | Recipe exists (`secured-claude up && claude -p ...`), runs locally pre-tag ; not yet a CI job | v0.3 — uses a test API key in a GitLab CI variable |
+| **read_only on egress-proxy / dns-filter sidecars** | Trade-off accepted v0.2 : alpine + apk-install at boot pattern needs writable /etc /usr /var. Other L4 hardening (cap_drop ALL, no_new_privileges, mem_limit, no host volumes) still applies. | v0.3 — pre-build dns-filter / egress-proxy as their own signed images |
+| **Multi-arch image (linux/arm64 native)** | Kaniko `--customPlatform=linux/amd64` produces an amd64-deterministic image regardless of the runner's native arch (arm64 macbook-local in v0.2). amd64 users get a native binary ; arm64 users (Apple Silicon, AWS Graviton) fall back to QEMU emulation under Docker Desktop / containerd `binfmt_misc`. v0.1.8 shipped arm64-only by mistake — this is the v0.2 fix. | v0.3 — true multi-arch manifest list (two parallel Kaniko jobs + `crane index append`) |
 | **Hook coverage of every Claude Code tool** | `matcher: "*"` in PreToolUse hooks every tool we know about (Read/Write/Edit/Bash/WebFetch/WebSearch/MCP/Task). Anthropic adds tools faster than we audit ; **a new tool shipping in a future Claude Code release would default to ALLOW until we map it**. Mitigated by the broker's `unknown_tool` catch-all (kind=`unknown_tool` action=`invoke`) which has no policy rule → DENY by Cerbos default ; verified by `tests/test_gateway.py::test_map_unknown_tool_falls_back`. | Continuous — Renovate bumps Claude Code, audit-demo adds scenarios per new tool |
 
 ### What we explicitly DON'T claim to defend against
@@ -103,20 +101,23 @@ ahead of being live.
 - Physical adversary at the developer machine
 - Compromise of `cerbos/cerbos` upstream image — mitigated by digest pinning ; residual risk acknowledged
 
-### Honest scoring of "defense-in-depth" in v0.1
+### Honest scoring of "defense-in-depth" in v0.2
 
-| Layer | Designed | Enforced in v0.1 | Tested in v0.1 |
+| Layer | Designed | Enforced in v0.2 | Tested in v0.2 |
 |---|---|---|---|
 | **L1 — PreToolUse hook + Cerbos PDP** | Yes | Yes | `bin/security-audit.sh` → 26/26 PASS + runtime smoke transcript |
-| **L2 — Network egress allowlist** | Yes (ADR-0010) | **No** — bridge network allows all egress | n/a |
+| **L2 — Network egress allowlist** | Yes ([ADR-0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md)) | **Yes** — tinyproxy `FilterDefaultDeny` ; CONNECT to non-allowlisted host returns 403 | End-to-end : `curl -x http://172.30.42.4:3128 https://evil.com` → `CONNECT tunnel failed, response 403` (proof in ADR-0019) |
+| **L3 — DNS allowlist** | Yes ([ADR-0020](docs/adr/0020-l3-dns-allowlist-dnsmasq.md)) | **Yes** — dnsmasq `no-resolv` ; `nslookup evil.com` → REFUSED | End-to-end : `nslookup evil.com 172.30.42.3` → `REFUSED` (proof in ADR-0020) |
 | **L3 — Filesystem confinement** | Yes | Yes — only `/workspace` mounted RW from host | Inferred ; no explicit test that `/Users/<me>/.ssh` is unreachable |
-| **L4 — Container hardening** | Yes | Partial — non-root + cap_drop ALL + seccomp default + read-only rootfs (cerbos AND claude-code as of v0.1.2) ; cgroup `mem_limit: 4g` | Inferred ; no explicit test (`docker inspect` would prove flags are set) |
+| **L4 — Container hardening** | Yes | Yes for the agent : non-root + cap_drop ALL + seccomp default + read-only rootfs + cgroup `mem_limit: 4g` ; partial for sidecars (read_only deferred — see "configured but NOT yet enforced" above) | Inferred ; no explicit test (`docker inspect` would prove flags are set) |
 
-Reading : v0.1 holds **L1 + partial L3/L4**. L2 is design-only. The
+Reading : v0.2 holds **L1 + L2 + L3-DNS + partial L3-FS / L4**. The
 "4 independent layers, each independently sufficient" framing in
-[ADR-0012](docs/adr/0012-defense-in-depth-layers.md) describes the
-**target architecture** ; v0.1 is the L1-load-bearing baseline. This is
-why the project tags v0.1.x not v1.0.0.
+[ADR-0012](docs/adr/0012-defense-in-depth-layers.md) is now **enforced
+end-to-end** for the agent's network egress (L1 + L2 + L3-DNS triple
+allowlist). The remaining v0.3 gaps (FS-tamper-evident audit log,
+multi-principal, runtime-smoke-in-CI, read_only on sidecars) are
+documented above.
 
 Full honest limits in [`SECURITY.md` §"Out-of-scope"](SECURITY.md#out-of-scope-honest-limits) and the residual-risks table in [`docs/security/threat-model.md` §7](docs/security/threat-model.md).
 
@@ -149,10 +150,10 @@ Claude Code is the most ergonomic agentic CLI today — but for **enterprise ado
 
 ```bash
 # Mac / Linux
-curl -sSL https://gitlab.com/secured-claude/secured-claude/-/raw/main/install.sh | bash
+curl -sSL https://gitlab.com/benoit.besson/secured-claude/-/raw/main/install.sh | bash
 
 # Windows (PowerShell)
-irm https://gitlab.com/secured-claude/secured-claude/-/raw/main/install.ps1 | iex
+irm https://gitlab.com/benoit.besson/secured-claude/-/raw/main/install.ps1 | iex
 
 # Then:
 export ANTHROPIC_API_KEY=sk-ant-...
