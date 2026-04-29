@@ -74,17 +74,26 @@ lint:shellcheck:
 # ---------------------------------------------------------------------------
 
 lint:cerbos-compile:
-  # Cerbos image is distroless (no shell), so GitLab CI can't wrap the script.
-  # We use docker:27 (no DinD needed — the runner mounts /var/run/docker.sock
-  # so the docker CLI inside the job talks to the host daemon directly,
-  # see docs/dev/developer-environment.md §"GitLab CI runner setup").
+  # The official cerbos/cerbos:0.42.0 image is distroless (no shell), and
+  # the runner-mounted docker.sock has perm issues on Mac Docker Desktop.
+  # Cleanest path : pull the static `cerbos` binary in an alpine job and
+  # run `cerbos compile` directly.
   stage: lint
-  image: docker:27
+  image: alpine:latest
   variables:
-    # Force unix socket — defeats GitLab's auto-set DOCKER_HOST=tcp://...
-    DOCKER_HOST: "unix:///var/run/docker.sock"
+    CERBOS_VERSION: "0.42.0"
   script:
-    - docker run --rm -v "$CI_PROJECT_DIR/policies:/policies:ro" cerbos/cerbos:0.42.0 compile /policies
+    - apk add --no-cache curl tar
+    - |
+      a=$(uname -m)
+      case "$a" in
+        x86_64)  arch_tag="Linux_x86_64" ;;
+        aarch64|arm64) arch_tag="Linux_arm64" ;;
+        *) echo "unsupported arch: $a" ; exit 2 ;;
+      esac
+      curl -fsSL "https://github.com/cerbos/cerbos/releases/download/v${CERBOS_VERSION}/cerbos_${CERBOS_VERSION}_${arch_tag}.tar.gz" \
+        | tar -xz cerbos
+    - ./cerbos compile policies/
 
 # ---------------------------------------------------------------------------
 # Conventional Commits — verify all commits follow CC 1.0
