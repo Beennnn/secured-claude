@@ -71,3 +71,70 @@ build:image:
       --cache=true
       --cache-ttl=24h
       --cache-repo="${CI_REGISTRY_IMAGE}/claude-code-cache"
+
+# ---------------------------------------------------------------------------
+# Sidecar images (ADR-0025) — pre-built so the runtime container can be
+# read_only:true. The Dockerfiles are tiny (FROM alpine + apk add + ENTRYPOINT)
+# so build time is < 30 s each. Same Kaniko + linux/amd64 + caching pattern
+# as build:image (the agent).
+# ---------------------------------------------------------------------------
+
+build:image:dns-filter:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_BRANCH == "dev"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - mkdir -p /kaniko/.docker
+    - |
+      cat > /kaniko/.docker/config.json <<EOF
+      {"auths":{"${CI_REGISTRY}":{"auth":"$(printf '%s:%s' "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 -w0)"}}}
+      EOF
+    - |
+      DESTS="--destination=${CI_REGISTRY_IMAGE}/dns-filter:${CI_COMMIT_SHA}"
+      [ -n "${CI_COMMIT_TAG}" ] && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/dns-filter:${CI_COMMIT_TAG}"
+      [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ] && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/dns-filter:latest"
+    - >
+      /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/Dockerfile.dns-filter"
+      --customPlatform=linux/amd64
+      ${DESTS}
+      --cache=true
+      --cache-ttl=24h
+      --cache-repo="${CI_REGISTRY_IMAGE}/dns-filter-cache"
+
+build:image:egress-proxy:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_BRANCH == "dev"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - mkdir -p /kaniko/.docker
+    - |
+      cat > /kaniko/.docker/config.json <<EOF
+      {"auths":{"${CI_REGISTRY}":{"auth":"$(printf '%s:%s' "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 -w0)"}}}
+      EOF
+    - |
+      DESTS="--destination=${CI_REGISTRY_IMAGE}/egress-proxy:${CI_COMMIT_SHA}"
+      [ -n "${CI_COMMIT_TAG}" ] && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/egress-proxy:${CI_COMMIT_TAG}"
+      [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ] && DESTS="$DESTS --destination=${CI_REGISTRY_IMAGE}/egress-proxy:latest"
+    - >
+      /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/Dockerfile.egress-proxy"
+      --customPlatform=linux/amd64
+      ${DESTS}
+      --cache=true
+      --cache-ttl=24h
+      --cache-repo="${CI_REGISTRY_IMAGE}/egress-proxy-cache"
