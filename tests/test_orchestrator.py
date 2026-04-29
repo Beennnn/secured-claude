@@ -34,9 +34,7 @@ def _fake_docker_on_path(monkeypatch: pytest.MonkeyPatch, request: pytest.Fixtur
     """
     if request.node.name == "test_docker_not_installed_raises":
         return
-    monkeypatch.setattr(
-        "secured_claude.orchestrator.shutil.which", lambda _name: "/usr/bin/docker"
-    )
+    monkeypatch.setattr("secured_claude.orchestrator.shutil.which", lambda _name: "/usr/bin/docker")
 
 
 def _ok_proc(stdout: str = "") -> subprocess.CompletedProcess[str]:
