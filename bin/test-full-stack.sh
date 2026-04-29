@@ -23,24 +23,27 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "${REPO_ROOT}" || { echo "FATAL: cannot cd to ${REPO_ROOT}" >&2; exit 1; }
 
 BROKER_PORT="8765"
-COMPOSE_ARGS="-f docker-compose.yml -f docker-compose.ci.yml"
+# Array form so each `-f <file>` is a separate argv element ; using a string
+# would either trigger SC2086 (unquoted = field-split surprises) or
+# concatenate into a single argument when quoted.
+COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.ci.yml)
 
 # shellcheck disable=SC2329
 cleanup() {
-    docker compose $COMPOSE_ARGS down >/dev/null 2>&1 || true
+    docker compose "${COMPOSE_ARGS[@]}" down >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 echo "===== boot full stack (cerbos + sidecars + broker + agent) ====="
-docker compose $COMPOSE_ARGS up -d --build broker dns-filter egress-proxy >/dev/null 2>&1 || {
+docker compose "${COMPOSE_ARGS[@]}" up -d --build broker dns-filter egress-proxy >/dev/null 2>&1 || {
     echo "FATAL: docker compose up failed" >&2
-    docker compose $COMPOSE_ARGS logs broker dns-filter egress-proxy 2>&1 | tail -50 >&2
+    docker compose "${COMPOSE_ARGS[@]}" logs broker dns-filter egress-proxy 2>&1 | tail -50 >&2
     exit 1
 }
 
 echo "===== wait for broker /health ====="
 for i in $(seq 1 60); do
-    if docker compose $COMPOSE_ARGS exec -T broker \
+    if docker compose "${COMPOSE_ARGS[@]}" exec -T broker \
         sh -c "wget -q -O- http://127.0.0.1:${BROKER_PORT}/health | grep -q ok" 2>/dev/null; then
         echo "  ✓ broker healthy after ${i}s"
         break
@@ -50,10 +53,10 @@ done
 
 # Re-check health one final time (the for loop's last iteration may
 # have just succeeded or just timed out).
-if ! docker compose $COMPOSE_ARGS exec -T broker \
+if ! docker compose "${COMPOSE_ARGS[@]}" exec -T broker \
     sh -c "wget -q -O- http://127.0.0.1:${BROKER_PORT}/health | grep -q ok" 2>/dev/null; then
     echo "FATAL: broker /health never responded" >&2
-    docker compose $COMPOSE_ARGS logs broker 2>&1 | tail -30 >&2
+    docker compose "${COMPOSE_ARGS[@]}" logs broker 2>&1 | tail -30 >&2
     exit 1
 fi
 
@@ -62,7 +65,7 @@ FAIL=0
 
 echo ""
 echo "===== L1 (Cerbos PDP via broker) — file ALLOW ====="
-allowed=$(docker compose $COMPOSE_ARGS exec -T broker sh -c "
+allowed=$(docker compose "${COMPOSE_ARGS[@]}" exec -T broker sh -c "
   wget -q -O- --post-data='{\"tool\":\"Read\",\"tool_input\":{\"file_path\":\"/workspace/foo.py\"},\"principal_id\":\"claude-code-default\",\"session_id\":\"smoke-1\"}' \
     --header='Content-Type: application/json' \
     http://127.0.0.1:${BROKER_PORT}/check
@@ -78,7 +81,7 @@ fi
 
 echo ""
 echo "===== L1 (Cerbos PDP via broker) — file DENY ====="
-denied=$(docker compose $COMPOSE_ARGS exec -T broker sh -c "
+denied=$(docker compose "${COMPOSE_ARGS[@]}" exec -T broker sh -c "
   wget -q -O- --post-data='{\"tool\":\"Read\",\"tool_input\":{\"file_path\":\"/etc/passwd\"},\"principal_id\":\"claude-code-default\",\"session_id\":\"smoke-2\"}' \
     --header='Content-Type: application/json' \
     http://127.0.0.1:${BROKER_PORT}/check
