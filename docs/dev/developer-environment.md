@@ -179,6 +179,60 @@ git commit -m "feat(broker): ..."
 git push origin dev
 ```
 
+## Lessons from the v0.1.1 runtime smoke
+
+Five bugs surfaced during the **first end-to-end runtime test** of v0.1.0 with
+a real Anthropic credential. Every single one of them was invisible to the
+local unit tests + bin/security-scans.sh + audit-demo (all of which were
+green at v0.1.0). Captured here so future contributors don't repeat the loop
+and so the takeaway is enforced :
+
+> **Static gates ≠ runtime correctness. A unit test that mocks `subprocess`
+> never tells you the binary won't run, that the image refuses to start,
+> that the container OOMs, that the entrypoint script wrapper trips on a
+> missing shebang. Smoke ≥ 1 real run is mandatory before tagging.**
+
+### The 5 bugs (commit 37988ae, v0.1.1)
+
+| # | Symptom (only visible at runtime) | Root cause | Why it slipped past v0.1.0 |
+|---|---|---|---|
+| 1 | `secured-claude up` exits 1 with `groupadd: GID '1000' already exists` | `node:22-slim` already has the `node` user at GID 1000 ; Dockerfile collided | Dockerfile was hadolint-clean, image build never tried in CI without a fresh cache, no `docker compose up` smoke |
+| 2 | claude exits 137 (SIGKILL = OOMKill) on every prompt | `mem_limit: 2g` insufficient for Claude Code's Node + JIT footprint (even `claude --version` survives, but `claude -p "prompt"` dies) | Tested with `claude --version` only (no API call) ; the `deploy.resources.limits` block was ALSO Swarm-only — wasn't applying as expected pre-test |
+| 3 | claude container exits cleanly with no error after `up` | Default CMD `claude` invokes the first-run interactive wizard ; with `compose up -d` no TTY → exit | Compose v2 swallowed the wizard output ; `docker logs` showed an interactive menu ANSI dump that looked like normal startup |
+| 4 | Container starts but `claude -p` produces empty output | Only `CLAUDE_CODE_OAUTH_TOKEN` set in user env, broker only passes `ANTHROPIC_API_KEY` ; entrypoint validated only the latter | Default install assumed users have an `sk-ant-api03-...` key ; reality on this Mac was an `sk-ant-oat01-...` Claude Code OAuth token |
+| 5 | Manual hook test outputs **thousands** of `permissionDecision: command not found` lines and never returns the JSON decision | `hook.py` lacked `#!/usr/bin/env python3` shebang ; the kernel ran the file as `/bin/sh` since the COPY target was an executable file with no exec context, and bash parsed Python source line-by-line as shell commands | Unit tests invoke `python -m secured_claude.hook` directly (interpreter prefix), bypassing the shebang lookup. The Claude Code hook system runs the script directly with no prefix — the only path that exposes the bug |
+
+### What changed in v0.1.1 to prevent recurrence
+
+- **Mandatory runtime smoke before tagging** : a release isn't "stable" until
+  `secured-claude up && claude -p "Read /etc/passwd"` produces a logged
+  DENY in the audit DB. Not a unit test, an actual claude binary call.
+- **Bug #5 rule** : every Python file installed as an executable must
+  `#!/usr/bin/env python3` shebang as line 1, even if the unit tests use
+  `python -m`. Tracked as a todo for v0.2 lint rule (custom ruff rule or
+  pre-commit hook that scans `pyproject.toml [project.scripts]` entries).
+- **Bug #4 rule** : the entrypoint accepts EITHER credential shape. The
+  `.env.example` documents both. The CLAUDE_CODE_OAUTH_TOKEN path is
+  validated explicitly (existing Claude Code users can drop into the
+  container without a separate API key).
+- **Bug #2 rule** : Mac runners need 4 G mem headroom for Claude Code.
+  `mem_limit: 4g` is the new floor.
+
+### The general lesson
+
+The `bin/security-scans.sh` + `bin/security-audit.sh` + 111 unit tests at
+92.6 % coverage proved that the **policy logic** is correct. They could
+not prove that the **packaging** works. Both layers are necessary ; neither
+is sufficient on its own.
+
+For the next release (v0.2), add a `security:full-runtime-smoke` CI job
+that : (a) starts the full stack via `secured-claude up`, (b) does a
+`docker exec claude -p "Read /etc/passwd"` against a test API key in a
+GitLab CI variable, (c) asserts the DENY appears in the audit DB. This
+catches all 5 bugs above in CI rather than at smoke time.
+
+---
+
 ## Troubleshooting
 
 - **`pytest` complains about missing dep** → `uv sync --all-extras` again.
