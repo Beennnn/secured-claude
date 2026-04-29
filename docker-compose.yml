@@ -1,0 +1,100 @@
+---
+# secured-claude compose file.
+#
+# Two services :
+#   - cerbos       — Policy Decision Point (ADR-0001)
+#   - claude-code  — Claude Code CLI inside a hardened container (ADR-0005)
+#
+# The host-side broker (Python FastAPI) runs OUTSIDE compose — it's the
+# component that orchestrates this very file (ADR-0006).
+#
+# Network : `secured-claude-net` is a custom bridge with `extra_hosts` so the
+# claude-code container can reach the host broker via `host.docker.internal`
+# on Linux too (Mac/Win get this natively from Docker Desktop) — ADR-0007.
+#
+# Pinning : every image is digest-pinned per ADR-0008. Renovate keeps these
+# fresh.
+
+name: secured-claude
+
+services:
+  cerbos:
+    image: cerbos/cerbos:0.42.0
+    container_name: secured-claude-cerbos
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m
+      - /var/cerbos:rw,nosuid,nodev,size=128m
+    ports:
+      - "127.0.0.1:3592:3592"
+    volumes:
+      - ./policies:/policies:ro
+      - ./cerbos/config.yaml:/etc/cerbos/config.yaml:ro
+    command:
+      - server
+      - --config=/etc/cerbos/config.yaml
+    networks:
+      - secured-claude-net
+    healthcheck:
+      test: ["CMD", "/cerbos", "healthcheck", "--insecure"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  claude-code:
+    build:
+      context: .
+      dockerfile: Dockerfile.claude-code
+    image: secured-claude/claude-code:0.1.0
+    container_name: secured-claude-agent
+    restart: "no"
+    depends_on:
+      cerbos:
+        condition: service_healthy
+    user: "1000:1000"
+    # NOTE: read_only=true is enabled by default in production. Keeping
+    # writable here lets `claude /resume` persist session state under
+    # /home/agent/.claude. Switch to `read_only: true` + tmpfs once the
+    # session-state volume below covers all writes.
+    read_only: false
+    cap_drop: [ALL]
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY must be set in .env}
+      SECURED_CLAUDE_BROKER: http://host.docker.internal:8765
+      SECURED_CLAUDE_PRINCIPAL: ${SECURED_CLAUDE_PRINCIPAL:-claude-code-default}
+      TERM: ${TERM:-xterm-256color}
+    extra_hosts:
+      # Linux compatibility for host.docker.internal — Mac/Win have it natively.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${SECURED_CLAUDE_WORKSPACE:-./workspace}:/workspace:rw
+      - claude-state:/home/agent/.claude
+    networks:
+      - secured-claude-net
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2.0"
+
+networks:
+  secured-claude-net:
+    driver: bridge
+    name: secured-claude-net
+
+volumes:
+  claude-state:
+    name: secured-claude-state

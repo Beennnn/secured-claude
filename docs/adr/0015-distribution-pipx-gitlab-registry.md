@@ -62,7 +62,7 @@ For **v0.2+** :
 
 ### Positive
 
-- **One-command install** on all 3 OSes — meets the user-stated requirement "au maximum automatisé sur Mac, Linux et Windows".
+- **One-command install** on all 3 OSes — meets the user-stated requirement "as automated as possible on Mac, Linux, and Windows".
 - **`pipx`-based** — isolates secured-claude in its own venv, cleanly upgradeable, auto-PATH-managed via `pipx ensurepath`.
 - **Single provider** (GitLab) — less surface to compromise. Both wheel and image come from same provider, cosign-signed, SBOM-attached.
 - **Verifiable** — `cosign verify ...` checks image origin, `pip download --require-hashes` (v0.2) checks wheel SHA.

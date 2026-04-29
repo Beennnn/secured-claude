@@ -13,7 +13,7 @@ Where should this broker live ?
 1. **Host-side** — runs as a Python process on the developer machine.
 2. **Container-side** — runs as a third container alongside Cerbos + Claude Code.
 
-The user's stated requirement was "deux conteneurs Docker" (two containers), so the broker as a third container would already break the spec. But beyond that, there are deeper reasons.
+The user's stated requirement was "two Docker containers", so the broker as a third container would already break the spec. But beyond that, there are deeper reasons.
 
 ## Decision
 
@@ -65,7 +65,7 @@ The hook in the agent container reaches the host broker via `host.docker.interna
   - Mounting the host Docker socket into the broker container (security smell)
   - Resolving host paths from inside a container (clumsy)
   - Networking the audit DB volume between broker container and host
-  Adds complexity without security benefit, and breaks the user's "deux conteneurs" spec. Rejected.
+  Adds complexity without security benefit, and breaks the user's "two containers" spec. Rejected.
 - **Broker inside the Claude Code container** — co-locating the gateway and the agent in one trust zone defeats the entire defense-in-depth premise. The whole point is the gateway is OUTSIDE the agent's reach. Rejected.
 - **Broker as a daemon launched by systemd / launchd** — adds OS-specific service registration. v0.2+ may add this for "always-on" enterprise deploys. v0.1 daemonizes manually via `nohup` / Python `multiprocessing.Process`.
 - **Broker as a binary (PyInstaller / Nuitka)** — would remove the Python runtime requirement on host. Considered for v0.3+ if user feedback demands it ; v0.1 keeps the Python dep for simplicity.
