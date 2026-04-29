@@ -57,6 +57,8 @@ dev = [
     "mypy>=1.13",
     "bandit>=1.7",
     "pip-audit>=2.7",
+    "types-requests>=2.32",
+    "types-pyyaml>=6.0",
 ]
 
 [project.scripts]
@@ -95,3 +97,19 @@ markers = [
     "audit: security audit demonstration tests (slow, require Cerbos container)",
     "integration: integration tests with real Cerbos",
 ]
+
+[tool.coverage.run]
+source = ["src/secured_claude"]
+branch = true
+omit = []
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+fail_under = 90
+show_missing = true
+skip_covered = false
