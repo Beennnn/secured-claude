@@ -55,6 +55,7 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0041](0041-multi-issuer-allowlist.md) | Multi-issuer ALLOWLIST | `MultiIssuerVerifier` wraps N OIDCVerifiers ; comma-separated `SECURED_CLAUDE_IDP_ISSUER` activates ; routes tokens by `iss` claim ; unlocks multi-tenant SaaS, M&A migration windows, hybrid cloud, DR failover |
 | [0042](0042-prometheus-metrics.md) | Prometheus counters + `/metrics` endpoint | 9 counter families across providers + verifiers + gateway ; operators alert on JWT-deny / JWKS-degraded / stale-dropped / cerbos-unavailable rates without log scraping ; loopback-only same trust boundary as `/check` |
 | [0043](0043-prometheus-histograms.md) | Prometheus histograms for latency distributions | 4 histograms (check / jwt_verify / jwks_fetch / principals_fetch) with custom-tuned buckets ; operators build SLO alerts on p99 latency breaches ; per-stage attribution when `/check` is slow |
+| [0044](0044-per-issuer-config.md) | Per-issuer JSON config | `SECURED_CLAUDE_IDP_CONFIG` JSON list with per-tenant audience / bearer / mTLS / TTL overrides ; falls back to shared envs (v0.7.1 path) when unset ; multi-tenant SaaS with mixed-auth modes |
 
 ### Operational envelope (where the code lives, how it's shipped)
 
