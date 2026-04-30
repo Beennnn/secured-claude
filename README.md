@@ -29,7 +29,7 @@
 
 ## Status — verify in 60 seconds
 
-**v0.6.1** — every claim below is backed by an artifact you can re-run yourself.
+**v0.6.2** — every claim below is backed by an artifact you can re-run yourself.
 **Don't trust the README, run the verifications.**
 
 ```bash
@@ -41,7 +41,7 @@ uv sync --all-extras
 bash bin/security-scans.sh
 #   → ruff/mypy/bandit clean ; pip-audit/grype/trivy 0 CVE ;
 #     gitleaks 0 ; hadolint/shellcheck/cerbos compile clean ;
-#     pytest 195/195, coverage 91.1 % ; SBOM 139 packages.
+#     pytest 204/204, coverage 90.7 % ; SBOM 139 packages.
 
 # 2. Live policy gate (~30 s) — boots a real Cerbos PDP and replays
 #    19 red-team + 7 happy-path scenarios end-to-end :
@@ -72,7 +72,7 @@ secured-claude audit --denied
 | FastAPI broker on host:8765 | `src/secured_claude/gateway.py` (75 lines, 100 % covered) | `tests/test_gateway.py` (8 tests) |
 | Append-only SQLite audit | `src/secured_claude/store.py` (85 lines, 98 % covered) | `tests/test_store.py` includes UPDATE/DELETE refused by trigger |
 | Claude Code container hardened | `Dockerfile.claude-code` + `docker-compose.yml` (non-root UID 1001, read-only cerbos rootfs, cap_drop ALL, healthcheck) | `secured-claude doctor`, `secured-claude up` |
-| 38 ADRs justifying every decision | `docs/adr/0000-template.md` + `0001..0038-*.md` | `ls docs/adr/` |
+| 39 ADRs justifying every decision | `docs/adr/0000-template.md` + `0001..0039-*.md` | `ls docs/adr/` |
 | GitLab CI green on macbook-local runner | `.gitlab-ci.yml` + `.gitlab-ci/{lint,test,security,build,publish,release}.yml` | [pipeline #2487406196](https://gitlab.com/benoit.besson/secured-claude/-/pipelines/2487406196) |
 | 7-layer security pipeline | `bin/security-scans.sh` + `pyproject.toml [tool.bandit]` | `bash bin/security-scans.sh` |
 | SBOM (SPDX 2.3) per release | `.gitlab-ci/security.yml::security:sbom` | release artifact `sbom.spdx.json` |
@@ -133,10 +133,10 @@ Full honest limits in [`SECURITY.md` §"Out-of-scope"](SECURITY.md#out-of-scope-
 
 > **What this project demonstrates mastery of**
 >
-> - 🔒 **Sécurité** — defense-in-depth : **1 intent layer + 3 confinement layers** ([ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md)). L1 (PreToolUse hook + Cerbos PDP) is the semantic gate that understands the agent's *intent* and decides on policy. L2 (tinyproxy egress allowlist), L3 (dnsmasq DNS allowlist + workspace-only FS mount), and L4 (cap_drop + read_only + seccomp + cgroups) bound the blast radius if L1 is bypassed. Hash-chain audit log + external anchor (ADR-0024 + ADR-0029). 5 cosign-signed multi-arch images cover binary + policy bytes (ADR-0028 + ADR-0035 + ADR-0036). External-IdP integration with TTL cache + bearer auth + stale-on-error (ADR-0034 + ADR-0037). End-to-end OIDC : agent presents JWT → broker validates against IdP JWKS (auto-discovered) → `sub` claim becomes principal_id (ADR-0038).
+> - 🔒 **Sécurité** — defense-in-depth : **1 intent layer + 3 confinement layers** ([ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md)). L1 (PreToolUse hook + Cerbos PDP) is the semantic gate that understands the agent's *intent* and decides on policy. L2 (tinyproxy egress allowlist), L3 (dnsmasq DNS allowlist + workspace-only FS mount), and L4 (cap_drop + read_only + seccomp + cgroups) bound the blast radius if L1 is bypassed. Hash-chain audit log + external anchor (ADR-0024 + ADR-0029). 5 cosign-signed multi-arch images cover binary + policy bytes (ADR-0028 + ADR-0035 + ADR-0036). External-IdP integration with TTL cache + bearer auth + stale-on-error (ADR-0034 + ADR-0037). End-to-end OIDC : agent presents JWT → broker validates against IdP JWKS (auto-discovered) → `sub` claim becomes principal_id (ADR-0038). Bounded staleness window via `SECURED_CLAUDE_MAX_STALE_AGE_S` so a permanent IdP misconfig can't keep serving compromised state forever (ADR-0039).
 > - 🤖 **IA** — Claude Code wrapped in a policy-gated container, every tool call (Read / Write / Edit / Bash / WebFetch / MCP / Task) intercepted via the native PreToolUse hook.
-> - 🏛 **Architecture** — Hexagonal-lite Python broker (host) + Cerbos PDP (container) + Claude Code CLI (container) ; clear trust boundary between intent (LLM) and execution (broker). 38 ADRs covering every security + operational decision.
-> - ✅ **Qualité** — 195 unit + integration tests, 91 % coverage gate. Security audit demonstration with 19 red-team scenarios + 7 happy-paths + policy fuzz + 8 static scans, run on every release.
+> - 🏛 **Architecture** — Hexagonal-lite Python broker (host) + Cerbos PDP (container) + Claude Code CLI (container) ; clear trust boundary between intent (LLM) and execution (broker). 39 ADRs covering every security + operational decision.
+> - ✅ **Qualité** — 204 unit + integration tests, 90 % coverage gate. Security audit demonstration with 19 red-team scenarios + 7 happy-paths + policy fuzz + 8 static scans, run on every release.
 > - 🔄 **CI/CD** — GitLab CI 8 stages (lint / test / security / build / smoke / publish / release), audit-demo strict gate on releases, cosign keyless signing + Syft SBOM for supply-chain provenance.
 > - ☁️ **Infrastructure** — Cross-platform install (Mac / Linux / Windows) via pipx + GitLab Package Registry ; Docker images pinned by digest ; offline bundle for air-gapped enterprise deploys ; native multi-arch (amd64 + arm64) per ADR-0028.
 > - 🛠 **DevX** — `secured-claude` CLI feels like `claude` (TTY preserved) ; `audit` subcommand surfaces the evolving allowlist ; `doctor` validates the install end-to-end ; principal directory pluggable via env (`SECURED_CLAUDE_PRINCIPALS` for YAML, `SECURED_CLAUDE_IDP_URL` + `SECURED_CLAUDE_IDP_BEARER_TOKEN` + `SECURED_CLAUDE_IDP_CACHE_TTL_S` for HTTP IdP) ; OIDC JWT validation activated via `SECURED_CLAUDE_IDP_ISSUER` + agent injects token via `SECURED_CLAUDE_AGENT_TOKEN`.
