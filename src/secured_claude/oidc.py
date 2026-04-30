@@ -244,11 +244,58 @@ class OIDCVerifier:
         return claims
 
 
-def make_verifier() -> OIDCVerifier | None:
+class MultiIssuerVerifier:
+    """Multi-issuer wrapper around N OIDCVerifiers (ADR-0041).
+
+    Holds an allowlist of OIDCVerifiers keyed by issuer. On `verify_token`,
+    extracts the unverified `iss` claim from the token, looks up the matching
+    verifier in the allowlist, and delegates the full validation to it. If
+    `iss` is missing or not in the allowlist → reject (None) without
+    consulting any verifier — fail-closed by allowlist.
+
+    Single-issuer deployments do NOT need this wrapper ; `make_verifier()`
+    returns a bare OIDCVerifier when only one issuer is configured.
+
+    Both classes (OIDCVerifier + MultiIssuerVerifier) expose the same
+    `verify_token(token: str) -> dict | None` shape so the broker /check
+    route doesn't care which it's holding.
+    """
+
+    def __init__(self, verifiers: list[OIDCVerifier]) -> None:
+        if not verifiers:
+            raise ValueError("MultiIssuerVerifier requires at least one verifier")
+        self._by_issuer: dict[str, OIDCVerifier] = {v.issuer: v for v in verifiers}
+        self.issuers: list[str] = list(self._by_issuer.keys())
+
+    def verify_token(self, token: str) -> dict[str, Any] | None:
+        if not token:
+            return None
+        try:
+            unverified: dict[str, Any] = jwt.decode(
+                token, options={"verify_signature": False, "verify_aud": False}
+            )
+        except PyJWTError:
+            return None
+        iss = str(unverified.get("iss") or "").rstrip("/")
+        verifier = self._by_issuer.get(iss)
+        if verifier is None:
+            log.warning("OIDC : token iss=%r not in allowlist %s", iss, self.issuers)
+            return None
+        return verifier.verify_token(token)
+
+
+def _parse_issuer_env(raw: str) -> list[str]:
+    """Parse SECURED_CLAUDE_IDP_ISSUER : single or comma-separated allowlist."""
+    return [s.strip().rstrip("/") for s in raw.split(",") if s.strip()]
+
+
+def make_verifier() -> OIDCVerifier | MultiIssuerVerifier | None:
     """Factory : build a verifier from env, or None if not configured.
 
     Resolution :
-      * SECURED_CLAUDE_IDP_ISSUER set + non-empty → activate.
+      * SECURED_CLAUDE_IDP_ISSUER set + non-empty → activate. Comma-separated
+        values become a multi-issuer ALLOWLIST (ADR-0041) ; the broker accepts
+        tokens from any of the listed issuers.
       * SECURED_CLAUDE_OIDC_AUDIENCE — optional aud claim.
       * SECURED_CLAUDE_OIDC_JWKS_TTL_S — JWKS cache lifetime.
       * SECURED_CLAUDE_IDP_TIMEOUT_S — HTTP timeout (shared with HTTPPrincipalProvider).
@@ -259,9 +306,14 @@ def make_verifier() -> OIDCVerifier | None:
 
     None means JWT verification is disabled — broker falls back to the
     env-based principal_id (the v0.5 / v0.6.0 behaviour).
+
+    Single-issuer config returns a bare OIDCVerifier. Multi-issuer config
+    returns a MultiIssuerVerifier wrapping N single-issuer instances. Both
+    share the verify_token signature so callers don't care which they hold.
     """
-    issuer = os.environ.get("SECURED_CLAUDE_IDP_ISSUER", "").strip()
-    if not issuer:
+    issuer_raw = os.environ.get("SECURED_CLAUDE_IDP_ISSUER", "")
+    issuers = _parse_issuer_env(issuer_raw)
+    if not issuers:
         return None
     audience = os.environ.get("SECURED_CLAUDE_OIDC_AUDIENCE", "").strip() or None
     ttl_str = os.environ.get("SECURED_CLAUDE_OIDC_JWKS_TTL_S", "3600.0")
@@ -284,16 +336,22 @@ def make_verifier() -> OIDCVerifier | None:
             max_stale = None
     cert_path = os.environ.get("SECURED_CLAUDE_IDP_CLIENT_CERT_PATH", "").strip() or None
     key_path = os.environ.get("SECURED_CLAUDE_IDP_CLIENT_KEY_PATH", "").strip() or None
-    return OIDCVerifier(
-        issuer=issuer,
-        audience=audience,
-        jwks_cache_ttl_s=ttl,
-        timeout_s=timeout,
-        bearer_token=bearer,
-        max_stale_age_s=max_stale,
-        client_cert_path=cert_path,
-        client_key_path=key_path,
-    )
+    verifiers = [
+        OIDCVerifier(
+            issuer=iss,
+            audience=audience,
+            jwks_cache_ttl_s=ttl,
+            timeout_s=timeout,
+            bearer_token=bearer,
+            max_stale_age_s=max_stale,
+            client_cert_path=cert_path,
+            client_key_path=key_path,
+        )
+        for iss in issuers
+    ]
+    if len(verifiers) == 1:
+        return verifiers[0]
+    return MultiIssuerVerifier(verifiers)
 
 
-__all__ = ["OIDCVerifier", "make_verifier"]
+__all__ = ["MultiIssuerVerifier", "OIDCVerifier", "make_verifier"]
