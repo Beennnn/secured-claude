@@ -22,16 +22,33 @@ publish:pypi:
     - uv run python -m pip install --quiet twine
     # hatch-vcs (ADR-0018) makes each tag produce a unique wheel filename
     # (secured_claude-X.Y.Z-py3-none-any.whl). Plain twine upload is
-    # idempotent for FRESH tags ; --skip-existing lets us re-run the
-    # publish stage on a re-tag (e.g. when a tag pipeline failed mid-way
-    # on a CI infrastructure issue and we re-tagged after fixing it).
-    # GitLab Package Registry returns 400 Bad Request on duplicate
-    # uploads ; --skip-existing translates that into a no-op + zero exit.
-    - >
-      uv run twine upload --skip-existing
-      --repository-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi"
-      -u gitlab-ci-token -p "${CI_JOB_TOKEN}"
-      dist/*
+    # idempotent for FRESH tags ; for RE-TAGS (after a CI infra issue
+    # we recover from), we need to swallow the 400 Bad Request that
+    # GitLab Package Registry returns on duplicate uploads.
+    #
+    # twine --skip-existing is NOT supported by GitLab Registry (twine
+    # rejects with "UnsupportedConfiguration" — only official PyPI
+    # supports it). So we shell-wrap : capture twine's output, exit
+    # zero ONLY on the specific "400 Bad Request" duplicate signal,
+    # propagate any other error code.
+    #
+    # This restores the v0.1.x shell-wrap pattern that the pre-hatch-vcs
+    # comment claimed was no longer needed — re-tags during CI-issue
+    # recovery DO need it.
+    - |
+      set +e
+      uv run twine upload \
+        --repository-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi" \
+        -u gitlab-ci-token -p "${CI_JOB_TOKEN}" \
+        dist/* 2>&1 | tee /tmp/twine.log
+      EXIT=${PIPESTATUS[0]}
+      if [ "$EXIT" -ne 0 ]; then
+        if grep -q "400 Bad Request" /tmp/twine.log; then
+          echo "INFO: 400 Bad Request → wheel already published (re-tag scenario), skipping"
+          exit 0
+        fi
+        exit "$EXIT"
+      fi
 
 # ---------------------------------------------------------------------------
 # Cosign keyless OIDC signing — ADR-0016 + ADR-0025 (sidecars in v0.3.1).
