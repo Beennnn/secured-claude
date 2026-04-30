@@ -495,3 +495,70 @@ def test_make_verifier_invalid_timeout_falls_back_to_default(
     v = make_verifier()
     assert v is not None
     assert v.timeout_s == 5.0
+
+
+# ────────────────────────────────────────────────────────────────────
+# ADR-0039 — max_stale_age_s on OIDCVerifier
+# ────────────────────────────────────────────────────────────────────
+
+
+@responses.activate
+def test_verifier_drops_stale_jwks_after_max_stale_age(
+    rsa_key_pair: tuple[Any, Any],
+    jwks_payload: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stale JWKS older than max_stale_age_s → verify_token returns None."""
+    private, _public = rsa_key_pair
+    responses.add(responses.GET, DISCOVERY_URL, json={"jwks_uri": JWKS_URL}, status=200)
+    responses.add(responses.GET, JWKS_URL, json=jwks_payload, status=200)
+    responses.add(responses.GET, JWKS_URL, status=503)  # 2nd call : 5xx
+    responses.add(responses.GET, JWKS_URL, status=503)  # 3rd call : still 5xx
+
+    token = _sign(private, {"iss": ISSUER, "sub": "alice", "exp": int(time.time()) + 60})
+    v = OIDCVerifier(
+        issuer=ISSUER,
+        jwks_cache_ttl_s=10.0,
+        max_stale_age_s=20.0,
+    )
+    fake_time = [100.0]
+    monkeypatch.setattr(v, "_now", lambda: fake_time[0])
+    # t=100 : success, cached at ts=100
+    assert v.verify_token(token) is not None
+    # t=115 : TTL expired (10) but stale age 15 < max_stale (20) → still serves
+    fake_time[0] = 115.0
+    assert v.verify_token(token) is not None
+    # t=140 : stale age 40 > max_stale (20) → drop cache + reject
+    fake_time[0] = 140.0
+    assert v.verify_token(token) is None
+    assert v._jwks is None
+
+
+def test_make_verifier_picks_up_max_stale_age_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_ISSUER", "https://idp.example.com")
+    monkeypatch.setenv("SECURED_CLAUDE_MAX_STALE_AGE_S", "300")
+    v = make_verifier()
+    assert v is not None
+    assert v.max_stale_age_s == 300.0
+
+
+def test_make_verifier_max_stale_age_unset_means_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SECURED_CLAUDE_MAX_STALE_AGE_S", raising=False)
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_ISSUER", "https://idp.example.com")
+    v = make_verifier()
+    assert v is not None
+    assert v.max_stale_age_s is None
+
+
+def test_make_verifier_max_stale_age_invalid_falls_back_to_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_ISSUER", "https://idp.example.com")
+    monkeypatch.setenv("SECURED_CLAUDE_MAX_STALE_AGE_S", "not-a-number")
+    v = make_verifier()
+    assert v is not None
+    assert v.max_stale_age_s is None

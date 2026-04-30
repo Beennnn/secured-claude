@@ -132,11 +132,16 @@ class HTTPPrincipalProvider(PrincipalProvider):
         timeout_s: float = 5.0,
         cache_ttl_s: float = 300.0,
         bearer_token: str | None = None,
+        max_stale_age_s: float | None = None,
     ) -> None:
         self.url = url
         self.timeout_s = timeout_s
         self.cache_ttl_s = cache_ttl_s
         self.bearer_token = bearer_token
+        # ADR-0039 — when set, stale-on-error stops serving the cache once
+        # it ages past max_stale_age_s and falls back to single-default.
+        # None = no max (the v0.6.0 / v0.6.1 behaviour : stale forever).
+        self.max_stale_age_s = max_stale_age_s
         self._cache: dict[str, dict[str, Any]] | None = None
         self._cache_ts: float = 0.0
 
@@ -163,10 +168,23 @@ class HTTPPrincipalProvider(PrincipalProvider):
             # Stale-on-error : prefer the last known-good cache over a
             # default-only fallback. Loud log so operators know.
             if self._cache is not None:
+                age = self._now() - self._cache_ts
+                if self.max_stale_age_s is not None and age > self.max_stale_age_s:
+                    # ADR-0039 : cache aged past max_stale_age_s ; stop
+                    # serving stale + drop to single-default fallback.
+                    log.warning(
+                        "principals URL %s unreachable + cache age %.1fs > max_stale_age %.1fs ; "
+                        "dropping cache + serving single-default fallback",
+                        self.url,
+                        age,
+                        self.max_stale_age_s,
+                    )
+                    self._cache = None
+                    return _fallback()
                 log.warning(
                     "principals URL %s unreachable ; serving stale cache (age %.1fs)",
                     self.url,
-                    self._now() - self._cache_ts,
+                    age,
                 )
                 return self._cache
             return _fallback()
@@ -215,6 +233,23 @@ def _parse_principals_dict(data: Any, *, source: str) -> dict[str, dict[str, Any
     return _ensure_default(out)
 
 
+def _parse_max_stale_age_env() -> float | None:
+    """Parse SECURED_CLAUDE_MAX_STALE_AGE_S env (shared across HTTP + OIDC).
+
+    None (env unset / blank / non-numeric) means no max — stale-on-error
+    serves the cache forever, matching the v0.6.1 behaviour. Setting a
+    value caps the staleness window so a permanent IdP misconfig
+    eventually drops back to fail-closed.
+    """
+    raw = os.environ.get("SECURED_CLAUDE_MAX_STALE_AGE_S", "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 def make_provider() -> PrincipalProvider:
     """Factory that picks the right provider from env config.
 
@@ -223,6 +258,7 @@ def make_provider() -> PrincipalProvider:
          * SECURED_CLAUDE_IDP_TIMEOUT_S — request timeout (default 5.0)
          * SECURED_CLAUDE_IDP_CACHE_TTL_S — cache lifetime (default 300)
          * SECURED_CLAUDE_IDP_BEARER_TOKEN — Authorization: Bearer <token>
+         * SECURED_CLAUDE_MAX_STALE_AGE_S — max stale-on-error age (None = unbounded)
       2. SECURED_CLAUDE_PRINCIPALS env or default config/principals.yaml
          → YAMLPrincipalProvider
     """
@@ -244,6 +280,7 @@ def make_provider() -> PrincipalProvider:
             timeout_s=timeout,
             cache_ttl_s=ttl,
             bearer_token=bearer,
+            max_stale_age_s=_parse_max_stale_age_env(),
         )
     yaml_path = Path(os.environ.get("SECURED_CLAUDE_PRINCIPALS", "config/principals.yaml"))
     return YAMLPrincipalProvider(yaml_path)
