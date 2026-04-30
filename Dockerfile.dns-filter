@@ -13,6 +13,14 @@ FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6
 # version matches the docker-compose v0.2 boot-time install we're replacing.
 RUN apk add --no-cache dnsmasq=2.90-r3
 
+# Bake the dnsmasq config into the image (ADR-0035 — replaces v0.5.3's
+# host-bind-mount of /etc/dnsmasq.conf, which broke under Docker-in-Docker
+# in CI because /builds/... CI workspace paths aren't visible to the host
+# daemon). The config is part of the cosign-signed image bytes ; operators
+# who need to override it can still bind-mount, but the default path
+# resolves inside the image.
+COPY --chmod=0644 docker/dnsmasq.conf /etc/dnsmasq.conf
+
 # Run as the unprivileged `nobody` user (uid 65534) — the alpine dnsmasq
 # package creates a `dnsmasq` user (uid 100) but its home is /dev/null which
 # dnsmasq can't write its run-state in. nobody works because we mount tmpfs
