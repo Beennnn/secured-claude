@@ -133,6 +133,8 @@ class HTTPPrincipalProvider(PrincipalProvider):
         cache_ttl_s: float = 300.0,
         bearer_token: str | None = None,
         max_stale_age_s: float | None = None,
+        client_cert_path: str | None = None,
+        client_key_path: str | None = None,
     ) -> None:
         self.url = url
         self.timeout_s = timeout_s
@@ -142,8 +144,20 @@ class HTTPPrincipalProvider(PrincipalProvider):
         # it ages past max_stale_age_s and falls back to single-default.
         # None = no max (the v0.6.0 / v0.6.1 behaviour : stale forever).
         self.max_stale_age_s = max_stale_age_s
+        # ADR-0040 — when both cert + key paths are set, the provider
+        # presents a TLS client cert on every fetch (mTLS). Either-only
+        # is treated as not configured (the requests `cert=` kwarg
+        # requires both halves of the pair).
+        self.client_cert_path = client_cert_path
+        self.client_key_path = client_key_path
         self._cache: dict[str, dict[str, Any]] | None = None
         self._cache_ts: float = 0.0
+
+    def _cert_kwarg(self) -> tuple[str, str] | None:
+        """Build the requests `cert=` kwarg (cert_path, key_path) or None."""
+        if self.client_cert_path and self.client_key_path:
+            return (self.client_cert_path, self.client_key_path)
+        return None
 
     def _now(self) -> float:
         # Indirection so tests can monkeypatch time.
@@ -161,7 +175,12 @@ class HTTPPrincipalProvider(PrincipalProvider):
             headers["Authorization"] = f"Bearer {self.bearer_token}"
 
         try:
-            resp = requests.get(self.url, timeout=self.timeout_s, headers=headers)
+            resp = requests.get(
+                self.url,
+                timeout=self.timeout_s,
+                headers=headers,
+                cert=self._cert_kwarg(),
+            )
             resp.raise_for_status()
         except requests.RequestException:
             log.exception("principals URL %s unreachable", self.url)
@@ -259,6 +278,8 @@ def make_provider() -> PrincipalProvider:
          * SECURED_CLAUDE_IDP_CACHE_TTL_S — cache lifetime (default 300)
          * SECURED_CLAUDE_IDP_BEARER_TOKEN — Authorization: Bearer <token>
          * SECURED_CLAUDE_MAX_STALE_AGE_S — max stale-on-error age (None = unbounded)
+         * SECURED_CLAUDE_IDP_CLIENT_CERT_PATH + SECURED_CLAUDE_IDP_CLIENT_KEY_PATH
+           — mTLS client cert/key pair (both required, ADR-0040)
       2. SECURED_CLAUDE_PRINCIPALS env or default config/principals.yaml
          → YAMLPrincipalProvider
     """
@@ -275,12 +296,16 @@ def make_provider() -> PrincipalProvider:
         except ValueError:
             ttl = 300.0
         bearer = os.environ.get("SECURED_CLAUDE_IDP_BEARER_TOKEN", "").strip() or None
+        cert_path = os.environ.get("SECURED_CLAUDE_IDP_CLIENT_CERT_PATH", "").strip() or None
+        key_path = os.environ.get("SECURED_CLAUDE_IDP_CLIENT_KEY_PATH", "").strip() or None
         return HTTPPrincipalProvider(
             url,
             timeout_s=timeout,
             cache_ttl_s=ttl,
             bearer_token=bearer,
             max_stale_age_s=_parse_max_stale_age_env(),
+            client_cert_path=cert_path,
+            client_key_path=key_path,
         )
     yaml_path = Path(os.environ.get("SECURED_CLAUDE_PRINCIPALS", "config/principals.yaml"))
     return YAMLPrincipalProvider(yaml_path)

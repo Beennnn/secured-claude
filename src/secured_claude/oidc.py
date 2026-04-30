@@ -67,6 +67,8 @@ class OIDCVerifier:
         timeout_s: float = 5.0,
         bearer_token: str | None = None,
         max_stale_age_s: float | None = None,
+        client_cert_path: str | None = None,
+        client_key_path: str | None = None,
     ) -> None:
         self.issuer = issuer.rstrip("/")
         self.audience = audience
@@ -77,10 +79,19 @@ class OIDCVerifier:
         # back to reject (verify_token returns None). None = no max
         # (the v0.6.1 behaviour).
         self.max_stale_age_s = max_stale_age_s
+        # ADR-0040 — mTLS client cert/key pair (both required) on the
+        # discovery + JWKS fetches. Either-only is treated as not configured.
+        self.client_cert_path = client_cert_path
+        self.client_key_path = client_key_path
         self._discovery: dict[str, Any] | None = None
         self._discovery_ts: float = 0.0
         self._jwks: dict[str, Any] | None = None
         self._jwks_ts: float = 0.0
+
+    def _cert_kwarg(self) -> tuple[str, str] | None:
+        if self.client_cert_path and self.client_key_path:
+            return (self.client_cert_path, self.client_key_path)
+        return None
 
     def _now(self) -> float:
         # Indirection so tests can monkeypatch time.
@@ -122,7 +133,9 @@ class OIDCVerifier:
             return self._discovery
         url = f"{self.issuer}/.well-known/openid-configuration"
         try:
-            resp = requests.get(url, timeout=self.timeout_s, headers=self._headers())
+            resp = requests.get(
+                url, timeout=self.timeout_s, headers=self._headers(), cert=self._cert_kwarg()
+            )
             resp.raise_for_status()
             data = resp.json()
         except (requests.RequestException, json.JSONDecodeError, ValueError):
@@ -154,7 +167,12 @@ class OIDCVerifier:
         if not jwks_uri:
             return self._jwks
         try:
-            resp = requests.get(jwks_uri, timeout=self.timeout_s, headers=self._headers())
+            resp = requests.get(
+                jwks_uri,
+                timeout=self.timeout_s,
+                headers=self._headers(),
+                cert=self._cert_kwarg(),
+            )
             resp.raise_for_status()
             data = resp.json()
         except (requests.RequestException, json.JSONDecodeError, ValueError):
@@ -236,6 +254,8 @@ def make_verifier() -> OIDCVerifier | None:
       * SECURED_CLAUDE_IDP_TIMEOUT_S — HTTP timeout (shared with HTTPPrincipalProvider).
       * SECURED_CLAUDE_IDP_BEARER_TOKEN — optional bearer header on JWKS fetch.
       * SECURED_CLAUDE_MAX_STALE_AGE_S — max stale-on-error age (None = unbounded ; ADR-0039).
+      * SECURED_CLAUDE_IDP_CLIENT_CERT_PATH + SECURED_CLAUDE_IDP_CLIENT_KEY_PATH —
+        mTLS client cert/key pair (both required ; ADR-0040).
 
     None means JWT verification is disabled — broker falls back to the
     env-based principal_id (the v0.5 / v0.6.0 behaviour).
@@ -262,6 +282,8 @@ def make_verifier() -> OIDCVerifier | None:
             max_stale = float(max_stale_raw)
         except ValueError:
             max_stale = None
+    cert_path = os.environ.get("SECURED_CLAUDE_IDP_CLIENT_CERT_PATH", "").strip() or None
+    key_path = os.environ.get("SECURED_CLAUDE_IDP_CLIENT_KEY_PATH", "").strip() or None
     return OIDCVerifier(
         issuer=issuer,
         audience=audience,
@@ -269,6 +291,8 @@ def make_verifier() -> OIDCVerifier | None:
         timeout_s=timeout,
         bearer_token=bearer,
         max_stale_age_s=max_stale,
+        client_cert_path=cert_path,
+        client_key_path=key_path,
     )
 
 

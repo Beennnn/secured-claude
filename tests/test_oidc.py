@@ -562,3 +562,79 @@ def test_make_verifier_max_stale_age_invalid_falls_back_to_none(
     v = make_verifier()
     assert v is not None
     assert v.max_stale_age_s is None
+
+
+# ────────────────────────────────────────────────────────────────────
+# ADR-0040 — mTLS client cert/key pair on JWKS / discovery fetches
+# ────────────────────────────────────────────────────────────────────
+
+
+def test_verifier_cert_kwarg_none_when_unset() -> None:
+    v = OIDCVerifier(issuer=ISSUER)
+    assert v._cert_kwarg() is None
+
+
+def test_verifier_cert_kwarg_set_when_both_paths_provided() -> None:
+    v = OIDCVerifier(
+        issuer=ISSUER,
+        client_cert_path="/etc/ssl/client.crt",
+        client_key_path="/etc/ssl/client.key",
+    )
+    assert v._cert_kwarg() == ("/etc/ssl/client.crt", "/etc/ssl/client.key")
+
+
+def test_verifier_cert_kwarg_none_when_partial() -> None:
+    v_cert_only = OIDCVerifier(
+        issuer=ISSUER, client_cert_path="/etc/ssl/client.crt", client_key_path=None
+    )
+    assert v_cert_only._cert_kwarg() is None
+    v_key_only = OIDCVerifier(
+        issuer=ISSUER, client_cert_path=None, client_key_path="/etc/ssl/client.key"
+    )
+    assert v_key_only._cert_kwarg() is None
+
+
+def test_verifier_passes_cert_kwarg_to_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Discovery + JWKS fetches both carry the `cert=` kwarg when configured."""
+    from unittest.mock import MagicMock
+
+    discovery_response = MagicMock()
+    discovery_response.json.return_value = {"jwks_uri": JWKS_URL}
+    discovery_response.raise_for_status = MagicMock()
+    jwks_response = MagicMock()
+    jwks_response.json.return_value = {"keys": []}
+    jwks_response.raise_for_status = MagicMock()
+
+    mock_get = MagicMock(side_effect=[discovery_response, jwks_response])
+    monkeypatch.setattr("secured_claude.oidc.requests.get", mock_get)
+    v = OIDCVerifier(
+        issuer=ISSUER,
+        client_cert_path="/etc/ssl/client.crt",
+        client_key_path="/etc/ssl/client.key",
+    )
+    # Trigger _get_jwks → discovery + JWKS calls
+    v._get_jwks()
+    assert mock_get.call_count == 2
+    for call in mock_get.call_args_list:
+        assert call.kwargs.get("cert") == ("/etc/ssl/client.crt", "/etc/ssl/client.key")
+
+
+def test_make_verifier_picks_up_mtls_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_ISSUER", "https://idp.example.com")
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_CLIENT_CERT_PATH", "/etc/ssl/client.crt")
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_CLIENT_KEY_PATH", "/etc/ssl/client.key")
+    v = make_verifier()
+    assert v is not None
+    assert v.client_cert_path == "/etc/ssl/client.crt"
+    assert v.client_key_path == "/etc/ssl/client.key"
+
+
+def test_make_verifier_mtls_partial_env_treated_as_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_ISSUER", "https://idp.example.com")
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_CLIENT_CERT_PATH", "/etc/ssl/client.crt")
+    monkeypatch.delenv("SECURED_CLAUDE_IDP_CLIENT_KEY_PATH", raising=False)
+    v = make_verifier()
+    assert v is not None
+    assert v._cert_kwarg() is None

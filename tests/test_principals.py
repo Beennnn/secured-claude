@@ -413,3 +413,91 @@ def test_make_provider_max_stale_age_invalid_falls_back_to_none(
     p = make_provider()
     assert isinstance(p, HTTPPrincipalProvider)
     assert p.max_stale_age_s is None
+
+
+# ────────────────────────────────────────────────────────────────────
+# ADR-0040 — mTLS client cert/key pair
+# ────────────────────────────────────────────────────────────────────
+
+
+def test_http_provider_cert_kwarg_set_when_both_paths_provided() -> None:
+    p = HTTPPrincipalProvider(
+        "http://idp.example.com/principals",
+        client_cert_path="/etc/ssl/client.crt",
+        client_key_path="/etc/ssl/client.key",
+    )
+    assert p._cert_kwarg() == ("/etc/ssl/client.crt", "/etc/ssl/client.key")
+
+
+def test_http_provider_cert_kwarg_none_when_either_path_missing() -> None:
+    p_cert_only = HTTPPrincipalProvider(
+        "http://idp.example.com/principals",
+        client_cert_path="/etc/ssl/client.crt",
+        client_key_path=None,
+    )
+    assert p_cert_only._cert_kwarg() is None
+    p_key_only = HTTPPrincipalProvider(
+        "http://idp.example.com/principals",
+        client_cert_path=None,
+        client_key_path="/etc/ssl/client.key",
+    )
+    assert p_key_only._cert_kwarg() is None
+    p_neither = HTTPPrincipalProvider("http://idp.example.com/principals")
+    assert p_neither._cert_kwarg() is None
+
+
+def test_http_provider_passes_cert_kwarg_to_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify the `cert=` kwarg is forwarded to requests.get on every fetch."""
+    from unittest.mock import MagicMock
+
+    mock_get = MagicMock()
+    mock_get.return_value.text = '{"principals": {}}'
+    mock_get.return_value.raise_for_status = MagicMock()
+    monkeypatch.setattr("secured_claude.principals.requests.get", mock_get)
+    p = HTTPPrincipalProvider(
+        "http://idp.example.com/principals",
+        client_cert_path="/etc/ssl/client.crt",
+        client_key_path="/etc/ssl/client.key",
+    )
+    p.load()
+    assert mock_get.call_count == 1
+    kwargs = mock_get.call_args.kwargs
+    assert kwargs.get("cert") == ("/etc/ssl/client.crt", "/etc/ssl/client.key")
+
+
+def test_http_provider_no_cert_kwarg_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default config → cert kwarg is None (mutual TLS not requested)."""
+    from unittest.mock import MagicMock
+
+    mock_get = MagicMock()
+    mock_get.return_value.text = '{"principals": {}}'
+    mock_get.return_value.raise_for_status = MagicMock()
+    monkeypatch.setattr("secured_claude.principals.requests.get", mock_get)
+    p = HTTPPrincipalProvider("http://idp.example.com/principals")
+    p.load()
+    kwargs = mock_get.call_args.kwargs
+    assert kwargs.get("cert") is None
+
+
+def test_make_provider_picks_up_mtls_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_URL", "https://idp.example.com/principals")
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_CLIENT_CERT_PATH", "/etc/ssl/client.crt")
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_CLIENT_KEY_PATH", "/etc/ssl/client.key")
+    p = make_provider()
+    assert isinstance(p, HTTPPrincipalProvider)
+    assert p.client_cert_path == "/etc/ssl/client.crt"
+    assert p.client_key_path == "/etc/ssl/client.key"
+
+
+def test_make_provider_mtls_partial_env_treated_as_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cert path only → mTLS not activated (both halves required)."""
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_URL", "https://idp.example.com/principals")
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_CLIENT_CERT_PATH", "/etc/ssl/client.crt")
+    monkeypatch.delenv("SECURED_CLAUDE_IDP_CLIENT_KEY_PATH", raising=False)
+    p = make_provider()
+    assert isinstance(p, HTTPPrincipalProvider)
+    assert p._cert_kwarg() is None
