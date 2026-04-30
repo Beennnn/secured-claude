@@ -23,9 +23,18 @@ name: secured-claude
 
 services:
   cerbos:
-    # Digest pin per ADR-0008 (no floating tags). Tag kept for human
-    # readability ; digest is the security boundary. Renovate bumps both.
-    image: cerbos/cerbos:0.42.0@sha256:4302b6ce74fec48f8842bd5fc250b4a7d416fb825e06d86d35c3794ed73182f2
+    # v0.5.5 (ADR-0036) — uses the custom-baked image with policies +
+    # config built in (Dockerfile.cerbos COPYs policies/ + cerbos/config.yaml
+    # into the upstream cerbos/cerbos:0.42.0 base). Replaces the v0.4
+    # bind-mounts that broke under Docker-in-Docker in CI.
+    #
+    # Local dev fallback : build: directive kicks in when the registry
+    # tag isn't pulled. Operators with per-deployment policies override
+    # via docker-compose.override.yml.
+    build:
+      context: .
+      dockerfile: Dockerfile.cerbos
+    image: ${CI_REGISTRY_IMAGE:-secured-claude}/cerbos:${CI_COMMIT_SHA:-0.5.5}
     container_name: secured-claude-cerbos
     restart: unless-stopped
     user: "1001:1001"
@@ -38,9 +47,6 @@ services:
       - /var/cerbos:rw,nosuid,nodev,size=128m
     ports:
       - "127.0.0.1:3592:3592"
-    volumes:
-      - ./policies:/policies:ro
-      - ./cerbos/config.yaml:/etc/cerbos/config.yaml:ro
     command:
       - server
       - --config=/etc/cerbos/config.yaml

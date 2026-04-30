@@ -123,3 +123,14 @@ publish:cosign-sign:broker:
       "${CI_REGISTRY_IMAGE}/broker:${CI_COMMIT_TAG}"
       --certificate-identity-regexp "^https://gitlab.com/benoit.besson/secured-claude"
       --certificate-oidc-issuer https://gitlab.com
+
+publish:cosign-sign:cerbos:
+  extends: .cosign-sign-base
+  needs: [build:image:manifest]
+  script:
+    - cosign sign --yes "${CI_REGISTRY_IMAGE}/cerbos:${CI_COMMIT_TAG}"
+    - >
+      cosign verify
+      "${CI_REGISTRY_IMAGE}/cerbos:${CI_COMMIT_TAG}"
+      --certificate-identity-regexp "^https://gitlab.com/benoit.besson/secured-claude"
+      --certificate-oidc-issuer https://gitlab.com

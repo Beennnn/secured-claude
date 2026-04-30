@@ -47,6 +47,7 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0033](0033-broker-containerised-for-ci-smoke.md) | Broker containerised for CI full-stack smoke | Dockerfile.broker + docker-compose.ci.yml override ; production stays host-side per ADR-0006 |
 | [0034](0034-principal-provider-abstraction.md) | PrincipalProvider abstraction (foundation for OIDC) | YAMLPrincipalProvider + HTTPPrincipalProvider + make_provider() factory ; SECURED_CLAUDE_IDP_URL env switches to URL fetch |
 | [0035](0035-bake-sidecar-configs.md) | Bake sidecar configs into the images | COPY dnsmasq.conf + tinyproxy.conf + filter.txt into the images ; drop v0.5.3 allow_failure on smoke:full-stack |
+| [0036](0036-cerbos-image-bake.md) | Bake Cerbos policies into a custom image | FROM cerbos/cerbos:0.42.0 + COPY policies + cerbos/config.yaml ; closes v0.5.4 smoke regression |
 
 ### Operational envelope (where the code lives, how it's shipped)
 
