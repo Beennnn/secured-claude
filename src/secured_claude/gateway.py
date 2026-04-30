@@ -2,7 +2,7 @@
 
 Implements ADR-0001 (Cerbos PDP), ADR-0002 (hook interception), ADR-0004
 (append-only audit log), ADR-0009 (fail-closed), ADR-0027 (multi-principal),
-ADR-0034 (PrincipalProvider abstraction).
+ADR-0034 (PrincipalProvider abstraction), ADR-0038 (JWT validation in /check).
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from secured_claude import __version__
 from secured_claude.cerbos_client import CerbosClient, CheckResult
+from secured_claude.oidc import OIDCVerifier, make_verifier
 from secured_claude.principals import (
     DEFAULT_PRINCIPAL as _DEFAULT_PRINCIPAL,
 )
@@ -47,6 +48,13 @@ class CheckRequest(BaseModel):
     tool_input: dict[str, Any] = Field(default_factory=dict)
     principal_id: str = "claude-code-default"
     session_id: str = "unknown-session"
+    # ADR-0038 : optional JWT presented by the agent. When set AND the
+    # broker has an OIDC verifier configured (SECURED_CLAUDE_IDP_ISSUER),
+    # the broker validates signature + iss + exp + aud and DERIVES the
+    # principal_id from the `sub` claim, overriding the field above.
+    # When unset OR no verifier is configured, the principal_id field
+    # is used as-is (v0.5 / v0.6.0 behaviour).
+    token: str | None = None
 
 
 class CheckResponse(BaseModel):
@@ -124,6 +132,7 @@ def make_app(
     cerbos: CerbosClient | None = None,
     store: Store | None = None,
     principals: dict[str, dict[str, Any]] | None = None,
+    verifier: OIDCVerifier | None = None,
 ) -> FastAPI:
     """Build the FastAPI app. Test code injects mocks via `cerbos` and `store`."""
     cerbos_client = cerbos or CerbosClient(
@@ -131,23 +140,63 @@ def make_app(
     )
     audit_store = store or Store()
     principal_directory = principals if principals is not None else load_principals()
+    # ADR-0038 — `verifier=None` means JWT verification is disabled.
+    # `make_verifier()` returns None unless SECURED_CLAUDE_IDP_ISSUER
+    # is set, so existing v0.6.0 deployments are unaffected.
+    oidc_verifier = verifier if verifier is not None else make_verifier()
 
     app = FastAPI(title="secured-claude broker", version=__version__)
 
     @app.post("/check", response_model=CheckResponse)
     def check(req: CheckRequest) -> CheckResponse:
         kind, rid, action, attr = map_tool_to_resource(req.tool, req.tool_input)
+
+        # ADR-0038 : if a JWT is presented AND a verifier is configured,
+        # the JWT is the source of truth for `principal_id`. A failed
+        # verification short-circuits to DENY — Cerbos is not consulted.
+        effective_principal_id = req.principal_id
+        jwt_deny_reason: str | None = None
+        if req.token and oidc_verifier is not None:
+            claims = oidc_verifier.verify_token(req.token)
+            if claims is None:
+                jwt_deny_reason = "JWT validation failed (signature / iss / exp / aud)"
+            else:
+                sub = str(claims.get("sub") or "")
+                if not sub:
+                    jwt_deny_reason = "JWT validation failed : missing `sub` claim"
+                else:
+                    effective_principal_id = sub
+
+        if jwt_deny_reason is not None:
+            decision_id = audit_store.insert(
+                session_id=req.session_id,
+                principal_id=req.principal_id,
+                principal_roles=[],
+                resource_kind=kind,
+                resource_id=rid,
+                action=action,
+                decision="DENY",
+                args=req.tool_input,
+                cerbos_reason=jwt_deny_reason,
+                duration_ms=0,
+            )
+            return CheckResponse(
+                approve=False,
+                reason=jwt_deny_reason,
+                decision_id=decision_id,
+            )
+
         # Resolve roles + attributes from the principal directory (ADR-0027).
         # Unknown principal_id falls back to the default — fail-open here is
         # safe because the resulting roles/attrs are minimal (agent + trust=0),
         # and the Cerbos policies still gate every action.
-        principal_entry = principal_directory.get(req.principal_id) or _DEFAULT_PRINCIPAL
+        principal_entry = principal_directory.get(effective_principal_id) or _DEFAULT_PRINCIPAL
         roles = list(principal_entry.get("roles") or ["agent"])
         principal_attr = dict(principal_entry.get("attributes") or {})
 
         try:
             result: CheckResult = cerbos_client.check(
-                principal_id=req.principal_id,
+                principal_id=effective_principal_id,
                 principal_roles=roles,
                 principal_attr=principal_attr,
                 resource_kind=kind,
@@ -167,7 +216,7 @@ def make_app(
         decision = "ALLOW" if allow else "DENY"
         decision_id = audit_store.insert(
             session_id=req.session_id,
-            principal_id=req.principal_id,
+            principal_id=effective_principal_id,
             principal_roles=roles,
             resource_kind=kind,
             resource_id=rid,

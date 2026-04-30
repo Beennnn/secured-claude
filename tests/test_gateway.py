@@ -313,3 +313,146 @@ def test_load_principals_env_override(tmp_path: Path, monkeypatch) -> None:
     out = load_principals()  # no path arg → reads env
     assert "custom-from-env" in out
     assert out["custom-from-env"]["attributes"]["trust_level"] == 2
+
+
+# ────────────────────────────────────────────────────────────────────
+# ADR-0038 — JWT validation path in /check
+# ────────────────────────────────────────────────────────────────────
+
+
+def _make_app_with_verifier(
+    tmp_path: Path,
+    *,
+    allow: bool,
+    verifier: Any,
+    principals: dict[str, dict[str, Any]] | None = None,
+) -> tuple[TestClient, Store, MagicMock]:
+    cerbos = MagicMock()
+    cerbos.check.return_value = CheckResult(
+        allow=allow,
+        reason=f"effect={'EFFECT_ALLOW' if allow else 'EFFECT_DENY'}",
+        duration_ms=2,
+        raw={},
+    )
+    store = Store(path=tmp_path / "test.db")
+    app = make_app(cerbos=cerbos, store=store, principals=principals, verifier=verifier)
+    return TestClient(app), store, cerbos
+
+
+def test_check_with_token_and_no_verifier_keeps_principal_id(tmp_path: Path) -> None:
+    """No verifier configured → token field is ignored, principal_id stands."""
+    client, store, cerbos = _make_app_with_verifier(tmp_path, allow=True, verifier=None)
+    resp = client.post(
+        "/check",
+        json={
+            "tool": "Read",
+            "tool_input": {"file_path": "/workspace/foo.py"},
+            "principal_id": "from-env-id",
+            "session_id": "s1",
+            "token": "ignored.token.string",
+        },
+    )
+    assert resp.status_code == 200
+    rows = store.query()
+    assert rows[0].principal_id == "from-env-id"
+    cerbos.check.assert_called_once()
+    assert cerbos.check.call_args.kwargs["principal_id"] == "from-env-id"
+
+
+def test_check_with_valid_token_derives_principal_from_sub(tmp_path: Path) -> None:
+    """Verifier returns claims → broker uses claims['sub'] as principal_id."""
+    verifier = MagicMock()
+    verifier.verify_token.return_value = {"sub": "alice", "iss": "https://idp.example.com"}
+    client, store, cerbos = _make_app_with_verifier(
+        tmp_path,
+        allow=True,
+        verifier=verifier,
+        principals={
+            "alice": {"roles": ["trusted_agent", "agent"], "attributes": {"trust_level": 2}},
+            "claude-code-default": {"roles": ["agent"], "attributes": {"trust_level": 0}},
+        },
+    )
+    resp = client.post(
+        "/check",
+        json={
+            "tool": "Read",
+            "tool_input": {"file_path": "/workspace/foo.py"},
+            "principal_id": "claude-code-default",  # ignored, JWT wins
+            "session_id": "s1",
+            "token": "valid.jwt.token",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["approve"] is True
+    rows = store.query()
+    assert rows[0].principal_id == "alice"
+    # Cerbos was called with alice's roles, not the default
+    assert cerbos.check.call_args.kwargs["principal_id"] == "alice"
+    assert "trusted_agent" in cerbos.check.call_args.kwargs["principal_roles"]
+
+
+def test_check_with_invalid_token_denies_immediately(tmp_path: Path) -> None:
+    """Verifier returns None → broker DENYs without consulting Cerbos."""
+    verifier = MagicMock()
+    verifier.verify_token.return_value = None
+    client, store, cerbos = _make_app_with_verifier(tmp_path, allow=True, verifier=verifier)
+    resp = client.post(
+        "/check",
+        json={
+            "tool": "Read",
+            "tool_input": {"file_path": "/workspace/foo.py"},
+            "principal_id": "claude-code-default",
+            "session_id": "s1",
+            "token": "tampered.jwt.token",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["approve"] is False
+    assert "JWT validation failed" in body["reason"]
+    cerbos.check.assert_not_called()
+    rows = store.query()
+    assert rows[0].decision == "DENY"
+    assert rows[0].principal_id == "claude-code-default"
+
+
+def test_check_with_token_missing_sub_denies(tmp_path: Path) -> None:
+    """Valid signature but missing `sub` claim → DENY."""
+    verifier = MagicMock()
+    verifier.verify_token.return_value = {"iss": "https://idp.example.com"}
+    client, _store, cerbos = _make_app_with_verifier(tmp_path, allow=True, verifier=verifier)
+    resp = client.post(
+        "/check",
+        json={
+            "tool": "Read",
+            "tool_input": {"file_path": "/workspace/foo.py"},
+            "session_id": "s1",
+            "token": "token.without.sub",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["approve"] is False
+    assert "missing `sub`" in body["reason"]
+    cerbos.check.assert_not_called()
+
+
+def test_check_without_token_when_verifier_set_uses_principal_id(tmp_path: Path) -> None:
+    """No token but verifier configured → principal_id field is used (back-compat)."""
+    verifier = MagicMock()
+    verifier.verify_token.return_value = None  # would reject IF called
+    client, _store, cerbos = _make_app_with_verifier(tmp_path, allow=True, verifier=verifier)
+    resp = client.post(
+        "/check",
+        json={
+            "tool": "Read",
+            "tool_input": {"file_path": "/workspace/foo.py"},
+            "principal_id": "claude-code-default",
+            "session_id": "s1",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["approve"] is True
+    verifier.verify_token.assert_not_called()
+    cerbos.check.assert_called_once()
