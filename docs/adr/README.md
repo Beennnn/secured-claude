@@ -51,6 +51,7 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0037](0037-http-principals-cache-and-bearer-auth.md) | TTL cache + bearer auth on HTTPPrincipalProvider | 5-min default cache + stale-on-error + Authorization header ; closes the v0.5 deferred IdP tickets ; mTLS still v0.7+ |
 | [0038](0038-jwt-validation-and-oidc-discovery.md) | JWT validation in /check + OIDC discovery | Optional `token` field on `/check` + `OIDCVerifier` that fetches `/.well-known/openid-configuration` + JWKS ; sub claim becomes principal_id ; fail-closed on signature / iss / exp / aud violation |
 | [0039](0039-max-stale-age-for-cache-and-jwks.md) | Max stale-age for cache + JWKS | `max_stale_age_s` caps stale-on-error window ; closes "permanent IdP misconfig serves compromised state forever" ; shared `SECURED_CLAUDE_MAX_STALE_AGE_S` env across both providers |
+| [0040](0040-mtls-client-cert-on-idp-fetches.md) | mTLS client cert/key on IdP fetches | `client_cert_path` + `client_key_path` pair on both providers ; closes the v0.7 mTLS ticket ; covers the residual ~20% of IdP integrations beyond bearer (PKI-backed enterprises, gov enclaves, HSM-backed keys) |
 
 ### Operational envelope (where the code lives, how it's shipped)
 
