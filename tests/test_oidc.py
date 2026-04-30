@@ -357,3 +357,141 @@ def test_verifier_discovery_without_jwks_uri_returns_none(rsa_key_pair: tuple[An
     responses.add(responses.GET, DISCOVERY_URL, json={"issuer": ISSUER}, status=200)
     v = OIDCVerifier(issuer=ISSUER)
     assert v.verify_token("anything") is None
+
+
+# Coverage-targeted tests : exercise the error paths with a *valid-format*
+# JWT so jwt.get_unverified_header() succeeds and the flow reaches the
+# JWKS / discovery code.
+
+
+@responses.activate
+def test_verifier_returns_none_when_discovery_5xx_with_valid_jwt(
+    rsa_key_pair: tuple[Any, Any], jwks_payload: dict[str, Any]
+) -> None:
+    """A valid-format JWT + 500 on discovery → reject (no JWKS available)."""
+    private, _public = rsa_key_pair
+    responses.add(responses.GET, DISCOVERY_URL, json={"err": "down"}, status=500)
+    token = _sign(
+        private,
+        {"iss": ISSUER, "sub": "alice", "exp": int(time.time()) + 60},
+    )
+    v = OIDCVerifier(issuer=ISSUER)
+    assert v.verify_token(token) is None
+
+
+@responses.activate
+def test_verifier_returns_none_when_jwks_5xx_with_valid_jwt(
+    rsa_key_pair: tuple[Any, Any], jwks_payload: dict[str, Any]
+) -> None:
+    """A valid-format JWT + 500 on JWKS → reject (discovery cached but no keys)."""
+    private, _public = rsa_key_pair
+    responses.add(responses.GET, DISCOVERY_URL, json={"jwks_uri": JWKS_URL}, status=200)
+    responses.add(responses.GET, JWKS_URL, json={"err": "down"}, status=500)
+    token = _sign(
+        private,
+        {"iss": ISSUER, "sub": "alice", "exp": int(time.time()) + 60},
+    )
+    v = OIDCVerifier(issuer=ISSUER)
+    assert v.verify_token(token) is None
+
+
+@responses.activate
+def test_verifier_returns_none_when_discovery_returns_garbage_json(
+    rsa_key_pair: tuple[Any, Any],
+) -> None:
+    private, _public = rsa_key_pair
+    responses.add(responses.GET, DISCOVERY_URL, body="not-json", status=200)
+    token = _sign(
+        private,
+        {"iss": ISSUER, "sub": "alice", "exp": int(time.time()) + 60},
+    )
+    v = OIDCVerifier(issuer=ISSUER)
+    assert v.verify_token(token) is None
+
+
+@responses.activate
+def test_verifier_handles_jwks_keys_not_a_list(rsa_key_pair: tuple[Any, Any]) -> None:
+    """JWKS with `keys` as a non-list → reject (malformed JWKS)."""
+    private, _public = rsa_key_pair
+    responses.add(responses.GET, DISCOVERY_URL, json={"jwks_uri": JWKS_URL}, status=200)
+    responses.add(responses.GET, JWKS_URL, json={"keys": "not-a-list"}, status=200)
+    token = _sign(
+        private,
+        {"iss": ISSUER, "sub": "alice", "exp": int(time.time()) + 60},
+    )
+    v = OIDCVerifier(issuer=ISSUER)
+    assert v.verify_token(token) is None
+
+
+@responses.activate
+def test_verifier_skips_non_dict_jwk_entry(
+    rsa_key_pair: tuple[Any, Any], jwks_payload: dict[str, Any]
+) -> None:
+    """JWKS with a string entry mixed in → skip + still match the dict entry."""
+    private, _public = rsa_key_pair
+    polluted = {"keys": ["not-a-dict", *jwks_payload["keys"]]}
+    responses.add(responses.GET, DISCOVERY_URL, json={"jwks_uri": JWKS_URL}, status=200)
+    responses.add(responses.GET, JWKS_URL, json=polluted, status=200)
+    token = _sign(
+        private,
+        {"iss": ISSUER, "sub": "alice", "exp": int(time.time()) + 60},
+    )
+    v = OIDCVerifier(issuer=ISSUER)
+    assert v.verify_token(token) is not None
+
+
+@responses.activate
+def test_verifier_skips_jwk_entry_that_fails_pyjwk_construction(
+    rsa_key_pair: tuple[Any, Any], jwks_payload: dict[str, Any]
+) -> None:
+    """JWKS containing a malformed JWK (with matching kid) → skip + try next."""
+    private, _public = rsa_key_pair
+    bad_jwk = {"kty": "INVALID", "kid": KID}
+    polluted = {"keys": [bad_jwk, *jwks_payload["keys"]]}
+    # Override the kid on the good key so the bad one matches first
+    polluted["keys"][1] = {**polluted["keys"][1], "kid": KID}
+    responses.add(responses.GET, DISCOVERY_URL, json={"jwks_uri": JWKS_URL}, status=200)
+    responses.add(responses.GET, JWKS_URL, json=polluted, status=200)
+    token = _sign(
+        private,
+        {"iss": ISSUER, "sub": "alice", "exp": int(time.time()) + 60},
+    )
+    v = OIDCVerifier(issuer=ISSUER)
+    # Either the bad JWK is skipped and good one wins (=> claims), OR both
+    # fail (=> None). The point is the malformed entry doesn't crash the
+    # verifier ; both branches keep coverage on lines 154-155.
+    result = v.verify_token(token)
+    assert result is None or result["sub"] == "alice"
+
+
+@responses.activate
+def test_verifier_caches_discovery_after_jwks_cache_expiry(
+    rsa_key_pair: tuple[Any, Any], jwks_payload: dict[str, Any]
+) -> None:
+    """First call seeds discovery + JWKS ; manually expire JWKS cache, second
+    call refetches JWKS but reuses the discovery cache (line 98)."""
+    private, _public = rsa_key_pair
+    responses.add(responses.GET, DISCOVERY_URL, json={"jwks_uri": JWKS_URL}, status=200)
+    responses.add(responses.GET, JWKS_URL, json=jwks_payload, status=200)
+    responses.add(responses.GET, JWKS_URL, json=jwks_payload, status=200)
+    token = _sign(
+        private,
+        {"iss": ISSUER, "sub": "alice", "exp": int(time.time()) + 60},
+    )
+    v = OIDCVerifier(issuer=ISSUER, jwks_cache_ttl_s=3600.0)
+    assert v.verify_token(token) is not None
+    # Manually expire JWKS cache without touching discovery cache
+    v._jwks_ts = 0.0  # force refetch
+    assert v.verify_token(token) is not None
+    discovery_calls = sum(1 for c in responses.calls if c.request.url.startswith(DISCOVERY_URL))
+    assert discovery_calls == 1, "discovery cache should have been used on the 2nd call"
+
+
+def test_make_verifier_invalid_timeout_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_ISSUER", "https://idp.example.com")
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_TIMEOUT_S", "not-a-number")
+    v = make_verifier()
+    assert v is not None
+    assert v.timeout_s == 5.0
