@@ -26,7 +26,7 @@ POST /check
   "tool_input": {"file_path": "/workspace/foo.py"},
   "principal_id": "claude-code-default",
   "session_id": "s1",
-  "token": "eyJhbGciOiJSUzI1NiIs..."
+  "token": "<JWT signed by the IdP>"
 }
 ```
 
