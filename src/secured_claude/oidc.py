@@ -331,20 +331,66 @@ def _parse_issuer_env(raw: str) -> list[str]:
     return [s.strip().rstrip("/") for s in raw.split(",") if s.strip()]
 
 
+def _parse_idp_config_env(raw: str) -> list[dict[str, Any]] | None:
+    """Parse SECURED_CLAUDE_IDP_CONFIG (JSON list) for per-issuer overrides (ADR-0044).
+
+    Schema :
+      [{"issuer": "https://a", "audience": "app1", "bearer_token": "tok1",
+        "client_cert_path": "/etc/ssl/a.crt", "client_key_path": "/etc/ssl/a.key",
+        "jwks_cache_ttl_s": 600, "max_stale_age_s": 1800, "timeout_s": 5},
+       {"issuer": "https://b", "audience": "app2"}]
+
+    All fields except `issuer` are optional ; missing fields fall back to the
+    shared SECURED_CLAUDE_* env defaults at make_verifier() time.
+
+    Returns None if the env is unset / empty / malformed (caller falls back
+    to SECURED_CLAUDE_IDP_ISSUER + shared envs — the v0.7.1 behaviour).
+    """
+    if not raw.strip():
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning("SECURED_CLAUDE_IDP_CONFIG is not valid JSON ; ignoring")
+        return None
+    if not isinstance(data, list):
+        log.warning("SECURED_CLAUDE_IDP_CONFIG must be a JSON list of objects ; ignoring")
+        return None
+    out: list[dict[str, Any]] = []
+    for entry in data:
+        if not isinstance(entry, dict) or not entry.get("issuer"):
+            log.warning(
+                "SECURED_CLAUDE_IDP_CONFIG entry missing required `issuer` field ; skipping"
+            )
+            continue
+        out.append(entry)
+    if not out:
+        return None
+    return out
+
+
 def make_verifier() -> OIDCVerifier | MultiIssuerVerifier | None:
     """Factory : build a verifier from env, or None if not configured.
 
-    Resolution :
-      * SECURED_CLAUDE_IDP_ISSUER set + non-empty → activate. Comma-separated
-        values become a multi-issuer ALLOWLIST (ADR-0041) ; the broker accepts
-        tokens from any of the listed issuers.
+    Resolution order (first match wins) :
+      1. SECURED_CLAUDE_IDP_CONFIG (JSON list, ADR-0044) — per-issuer
+         audience / bearer / mTLS / TTL overrides. Each list entry is a
+         standalone OIDCVerifier config ; multi-tenant SaaS with mixed-auth
+         needs uses this.
+      2. SECURED_CLAUDE_IDP_ISSUER set + non-empty → activate. Comma-separated
+         values become a multi-issuer ALLOWLIST (ADR-0041) ; the broker accepts
+         tokens from any of the listed issuers. All issuers share the rest of
+         the SECURED_CLAUDE_* config (audience / bearer / mTLS / TTL).
+
+    Shared envs (used when SECURED_CLAUDE_IDP_CONFIG is unset, OR as fallback
+    defaults for fields missing from a per-issuer JSON entry) :
       * SECURED_CLAUDE_OIDC_AUDIENCE — optional aud claim.
       * SECURED_CLAUDE_OIDC_JWKS_TTL_S — JWKS cache lifetime.
-      * SECURED_CLAUDE_IDP_TIMEOUT_S — HTTP timeout (shared with HTTPPrincipalProvider).
+      * SECURED_CLAUDE_IDP_TIMEOUT_S — HTTP timeout.
       * SECURED_CLAUDE_IDP_BEARER_TOKEN — optional bearer header on JWKS fetch.
-      * SECURED_CLAUDE_MAX_STALE_AGE_S — max stale-on-error age (None = unbounded ; ADR-0039).
+      * SECURED_CLAUDE_MAX_STALE_AGE_S — max stale-on-error age (ADR-0039).
       * SECURED_CLAUDE_IDP_CLIENT_CERT_PATH + SECURED_CLAUDE_IDP_CLIENT_KEY_PATH —
-        mTLS client cert/key pair (both required ; ADR-0040).
+        mTLS client cert/key pair (ADR-0040).
 
     None means JWT verification is disabled — broker falls back to the
     env-based principal_id (the v0.5 / v0.6.0 behaviour).
@@ -353,41 +399,66 @@ def make_verifier() -> OIDCVerifier | MultiIssuerVerifier | None:
     returns a MultiIssuerVerifier wrapping N single-issuer instances. Both
     share the verify_token signature so callers don't care which they hold.
     """
+    # Shared defaults (read once, used both as standalone config + as
+    # fallback when a per-issuer JSON entry omits a field).
+    audience_default = os.environ.get("SECURED_CLAUDE_OIDC_AUDIENCE", "").strip() or None
+    ttl_str = os.environ.get("SECURED_CLAUDE_OIDC_JWKS_TTL_S", "3600.0")
+    try:
+        ttl_default = float(ttl_str)
+    except ValueError:
+        ttl_default = 3600.0
+    timeout_str = os.environ.get("SECURED_CLAUDE_IDP_TIMEOUT_S", "5.0")
+    try:
+        timeout_default = float(timeout_str)
+    except ValueError:
+        timeout_default = 5.0
+    bearer_default = os.environ.get("SECURED_CLAUDE_IDP_BEARER_TOKEN", "").strip() or None
+    max_stale_raw = os.environ.get("SECURED_CLAUDE_MAX_STALE_AGE_S", "").strip()
+    max_stale_default: float | None = None
+    if max_stale_raw:
+        try:
+            max_stale_default = float(max_stale_raw)
+        except ValueError:
+            max_stale_default = None
+    cert_default = os.environ.get("SECURED_CLAUDE_IDP_CLIENT_CERT_PATH", "").strip() or None
+    key_default = os.environ.get("SECURED_CLAUDE_IDP_CLIENT_KEY_PATH", "").strip() or None
+
+    # Resolution path 1 (ADR-0044) : per-issuer JSON config wins.
+    config_raw = os.environ.get("SECURED_CLAUDE_IDP_CONFIG", "")
+    per_issuer = _parse_idp_config_env(config_raw)
+    if per_issuer is not None:
+        verifiers = [
+            OIDCVerifier(
+                issuer=str(entry["issuer"]),
+                audience=entry.get("audience", audience_default),
+                jwks_cache_ttl_s=float(entry.get("jwks_cache_ttl_s", ttl_default)),
+                timeout_s=float(entry.get("timeout_s", timeout_default)),
+                bearer_token=entry.get("bearer_token", bearer_default),
+                max_stale_age_s=entry.get("max_stale_age_s", max_stale_default),
+                client_cert_path=entry.get("client_cert_path", cert_default),
+                client_key_path=entry.get("client_key_path", key_default),
+            )
+            for entry in per_issuer
+        ]
+        if len(verifiers) == 1:
+            return verifiers[0]
+        return MultiIssuerVerifier(verifiers)
+
+    # Resolution path 2 (ADR-0041) : SECURED_CLAUDE_IDP_ISSUER + shared envs.
     issuer_raw = os.environ.get("SECURED_CLAUDE_IDP_ISSUER", "")
     issuers = _parse_issuer_env(issuer_raw)
     if not issuers:
         return None
-    audience = os.environ.get("SECURED_CLAUDE_OIDC_AUDIENCE", "").strip() or None
-    ttl_str = os.environ.get("SECURED_CLAUDE_OIDC_JWKS_TTL_S", "3600.0")
-    try:
-        ttl = float(ttl_str)
-    except ValueError:
-        ttl = 3600.0
-    timeout_str = os.environ.get("SECURED_CLAUDE_IDP_TIMEOUT_S", "5.0")
-    try:
-        timeout = float(timeout_str)
-    except ValueError:
-        timeout = 5.0
-    bearer = os.environ.get("SECURED_CLAUDE_IDP_BEARER_TOKEN", "").strip() or None
-    max_stale_raw = os.environ.get("SECURED_CLAUDE_MAX_STALE_AGE_S", "").strip()
-    max_stale: float | None = None
-    if max_stale_raw:
-        try:
-            max_stale = float(max_stale_raw)
-        except ValueError:
-            max_stale = None
-    cert_path = os.environ.get("SECURED_CLAUDE_IDP_CLIENT_CERT_PATH", "").strip() or None
-    key_path = os.environ.get("SECURED_CLAUDE_IDP_CLIENT_KEY_PATH", "").strip() or None
     verifiers = [
         OIDCVerifier(
             issuer=iss,
-            audience=audience,
-            jwks_cache_ttl_s=ttl,
-            timeout_s=timeout,
-            bearer_token=bearer,
-            max_stale_age_s=max_stale,
-            client_cert_path=cert_path,
-            client_key_path=key_path,
+            audience=audience_default,
+            jwks_cache_ttl_s=ttl_default,
+            timeout_s=timeout_default,
+            bearer_token=bearer_default,
+            max_stale_age_s=max_stale_default,
+            client_cert_path=cert_default,
+            client_key_path=key_default,
         )
         for iss in issuers
     ]

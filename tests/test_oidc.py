@@ -772,3 +772,179 @@ def test_make_verifier_blank_issuer_in_csv_dropped(
     v = make_verifier()
     assert isinstance(v, MultiIssuerVerifier)
     assert len(v.issuers) == 2
+
+
+# ────────────────────────────────────────────────────────────────────
+# ADR-0044 — per-issuer JSON config (SECURED_CLAUDE_IDP_CONFIG)
+# ────────────────────────────────────────────────────────────────────
+
+
+def test_idp_config_json_with_per_issuer_audience_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each issuer in the JSON config gets its own audience."""
+    monkeypatch.setenv(
+        "SECURED_CLAUDE_IDP_CONFIG",
+        f'[{{"issuer":"{ISSUER_A}","audience":"app-a"}},'
+        f'{{"issuer":"{ISSUER_B}","audience":"app-b"}}]',
+    )
+    v = make_verifier()
+    assert isinstance(v, MultiIssuerVerifier)
+    assert v._by_issuer[ISSUER_A].audience == "app-a"
+    assert v._by_issuer[ISSUER_B].audience == "app-b"
+
+
+def test_idp_config_json_with_per_issuer_bearer_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-issuer bearer tokens — multi-tenant SaaS with separate IdP secrets."""
+    monkeypatch.setenv(
+        "SECURED_CLAUDE_IDP_CONFIG",
+        f'[{{"issuer":"{ISSUER_A}","bearer_token":"tok-a"}},'
+        f'{{"issuer":"{ISSUER_B}","bearer_token":"tok-b"}}]',
+    )
+    v = make_verifier()
+    assert isinstance(v, MultiIssuerVerifier)
+    assert v._by_issuer[ISSUER_A].bearer_token == "tok-a"
+    assert v._by_issuer[ISSUER_B].bearer_token == "tok-b"
+
+
+def test_idp_config_json_with_per_issuer_mtls_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "SECURED_CLAUDE_IDP_CONFIG",
+        f'[{{"issuer":"{ISSUER_A}","client_cert_path":"/etc/ssl/a.crt",'
+        f'"client_key_path":"/etc/ssl/a.key"}},'
+        f'{{"issuer":"{ISSUER_B}","client_cert_path":"/etc/ssl/b.crt",'
+        f'"client_key_path":"/etc/ssl/b.key"}}]',
+    )
+    v = make_verifier()
+    assert isinstance(v, MultiIssuerVerifier)
+    assert v._by_issuer[ISSUER_A]._cert_kwarg() == ("/etc/ssl/a.crt", "/etc/ssl/a.key")
+    assert v._by_issuer[ISSUER_B]._cert_kwarg() == ("/etc/ssl/b.crt", "/etc/ssl/b.key")
+
+
+def test_idp_config_json_falls_back_to_shared_env_when_field_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fields missing from a JSON entry inherit the shared SECURED_CLAUDE_* envs."""
+    monkeypatch.setenv("SECURED_CLAUDE_OIDC_AUDIENCE", "shared-aud")
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_BEARER_TOKEN", "shared-bearer")
+    monkeypatch.setenv(
+        "SECURED_CLAUDE_IDP_CONFIG",
+        f'[{{"issuer":"{ISSUER_A}","audience":"override-a"}},{{"issuer":"{ISSUER_B}"}}]',
+    )
+    v = make_verifier()
+    assert isinstance(v, MultiIssuerVerifier)
+    # A overrode audience but inherits bearer
+    assert v._by_issuer[ISSUER_A].audience == "override-a"
+    assert v._by_issuer[ISSUER_A].bearer_token == "shared-bearer"
+    # B inherits both
+    assert v._by_issuer[ISSUER_B].audience == "shared-aud"
+    assert v._by_issuer[ISSUER_B].bearer_token == "shared-bearer"
+
+
+def test_idp_config_single_issuer_returns_bare_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 1-element JSON list still returns OIDCVerifier (not the wrapper)."""
+    monkeypatch.setenv(
+        "SECURED_CLAUDE_IDP_CONFIG",
+        f'[{{"issuer":"{ISSUER_A}","audience":"app-a"}}]',
+    )
+    v = make_verifier()
+    assert isinstance(v, OIDCVerifier)
+    assert v.issuer == ISSUER_A
+    assert v.audience == "app-a"
+
+
+def test_idp_config_overrides_idp_issuer_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When BOTH envs are set, JSON config wins (resolution order)."""
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_ISSUER", "https://ignored.example.com")
+    monkeypatch.setenv(
+        "SECURED_CLAUDE_IDP_CONFIG",
+        f'[{{"issuer":"{ISSUER_A}"}}]',
+    )
+    v = make_verifier()
+    assert isinstance(v, OIDCVerifier)
+    assert v.issuer == ISSUER_A  # not the ignored one
+
+
+def test_idp_config_invalid_json_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed JSON → fallback to SECURED_CLAUDE_IDP_ISSUER."""
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_ISSUER", ISSUER_A)
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_CONFIG", "not-json")
+    v = make_verifier()
+    assert isinstance(v, OIDCVerifier)
+    assert v.issuer == ISSUER_A
+
+
+def test_idp_config_not_a_list_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """JSON dict (not list) → fallback."""
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_ISSUER", ISSUER_A)
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_CONFIG", '{"issuer":"x"}')
+    v = make_verifier()
+    assert isinstance(v, OIDCVerifier)
+    assert v.issuer == ISSUER_A
+
+
+def test_idp_config_entry_missing_issuer_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Entries without `issuer` are silently dropped ; valid entries are kept."""
+    monkeypatch.setenv(
+        "SECURED_CLAUDE_IDP_CONFIG",
+        f'[{{"audience":"orphan"}},{{"issuer":"{ISSUER_A}"}}]',
+    )
+    v = make_verifier()
+    assert isinstance(v, OIDCVerifier)
+    assert v.issuer == ISSUER_A
+
+
+def test_idp_config_all_entries_invalid_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If all JSON entries are dropped, fallback to SECURED_CLAUDE_IDP_ISSUER."""
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_ISSUER", ISSUER_A)
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_CONFIG", '[{"audience":"orphan"}]')
+    v = make_verifier()
+    assert isinstance(v, OIDCVerifier)
+    assert v.issuer == ISSUER_A
+
+
+def test_idp_config_unset_falls_back_to_idp_issuer_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default path : SECURED_CLAUDE_IDP_CONFIG unset → v0.7.1 behaviour."""
+    monkeypatch.delenv("SECURED_CLAUDE_IDP_CONFIG", raising=False)
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_ISSUER", ISSUER_A)
+    v = make_verifier()
+    assert isinstance(v, OIDCVerifier)
+    assert v.issuer == ISSUER_A
+
+
+def test_idp_config_per_issuer_jwks_ttl_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "SECURED_CLAUDE_IDP_CONFIG",
+        f'[{{"issuer":"{ISSUER_A}","jwks_cache_ttl_s":60}}]',
+    )
+    v = make_verifier()
+    assert isinstance(v, OIDCVerifier)
+    assert v.jwks_cache_ttl_s == 60.0
+
+
+def test_idp_config_per_issuer_max_stale_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "SECURED_CLAUDE_IDP_CONFIG",
+        f'[{{"issuer":"{ISSUER_A}","max_stale_age_s":120}}]',
+    )
+    v = make_verifier()
+    assert isinstance(v, OIDCVerifier)
+    assert v.max_stale_age_s == 120.0
