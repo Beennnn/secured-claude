@@ -25,7 +25,7 @@ use the Prometheus testing helpers.
 
 from __future__ import annotations
 
-from prometheus_client import CollectorRegistry, Counter, generate_latest
+from prometheus_client import CollectorRegistry, Counter, Histogram, generate_latest
 
 # Dedicated registry so tests can use the default Prometheus registry
 # without leaking app counters between test invocations. The gateway
@@ -120,6 +120,80 @@ CHECK_DECISIONS_TOTAL = Counter(
 )
 
 
+# ────────────────────────────────────────────────────────────────────
+# Histograms (ADR-0043) — latency distributions for SLO tracking
+# ────────────────────────────────────────────────────────────────────
+#
+# Why histograms in addition to counters : counters tell operators
+# "is something failing ?" ; histograms tell them "is something
+# *slow* ?". The hook latency budget is 50 ms p99 (ADR-0002) ; alerts
+# on `histogram_quantile(0.99, rate(check_duration_seconds_bucket[5m]))`
+# fire when that contract drifts.
+#
+# Buckets are tuned to the broker's actual operating range (sub-50ms
+# typical) — Prometheus's default buckets (5ms .. 10s) are too wide
+# at the bottom and waste cardinality. Custom buckets focus on the
+# sub-50ms range with fine granularity, then a few coarser buckets
+# for tail outliers.
+
+# Sub-50ms tight buckets, then escalating tail (5ms .. 5s)
+_BROKER_LATENCY_BUCKETS = (
+    0.001,
+    0.002,
+    0.005,
+    0.010,
+    0.020,
+    0.050,
+    0.100,
+    0.250,
+    0.500,
+    1.0,
+    2.5,
+    5.0,
+)
+
+CHECK_DURATION_SECONDS = Histogram(
+    "secured_claude_check_duration_seconds",
+    "End-to-end /check latency (hook → broker → cerbos → audit).",
+    buckets=_BROKER_LATENCY_BUCKETS,
+    registry=REGISTRY,
+)
+
+JWT_VERIFY_DURATION_SECONDS = Histogram(
+    "secured_claude_jwt_verify_duration_seconds",
+    "OIDCVerifier.verify_token() latency (sig + iss + exp + aud + kid).",
+    buckets=_BROKER_LATENCY_BUCKETS,
+    registry=REGISTRY,
+)
+
+# JWKS fetches are slower (HTTP roundtrip to IdP) — wider buckets
+_FETCH_LATENCY_BUCKETS = (
+    0.010,
+    0.050,
+    0.100,
+    0.250,
+    0.500,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+)
+
+JWKS_FETCH_DURATION_SECONDS = Histogram(
+    "secured_claude_jwks_fetch_duration_seconds",
+    "JWKS HTTP fetch latency (cache miss only ; cache hits don't observe).",
+    buckets=_FETCH_LATENCY_BUCKETS,
+    registry=REGISTRY,
+)
+
+PRINCIPALS_FETCH_DURATION_SECONDS = Histogram(
+    "secured_claude_principals_fetch_duration_seconds",
+    "Principals HTTP fetch latency (cache miss only).",
+    buckets=_FETCH_LATENCY_BUCKETS,
+    registry=REGISTRY,
+)
+
+
 def render() -> bytes:
     """Render the registry in Prometheus exposition format."""
     return generate_latest(REGISTRY)
@@ -132,12 +206,16 @@ def content_type() -> str:
 
 __all__ = [
     "CHECK_DECISIONS_TOTAL",
+    "CHECK_DURATION_SECONDS",
+    "JWKS_FETCH_DURATION_SECONDS",
     "JWKS_FETCH_TOTAL",
     "JWKS_STALE_DROPPED_TOTAL",
+    "JWT_VERIFY_DURATION_SECONDS",
     "JWT_VERIFY_TOTAL",
     "MULTI_ISSUER_ROUTING_TOTAL",
     "PRINCIPALS_CACHE_HIT_TOTAL",
     "PRINCIPALS_FALLBACK_TOTAL",
+    "PRINCIPALS_FETCH_DURATION_SECONDS",
     "PRINCIPALS_FETCH_TOTAL",
     "PRINCIPALS_STALE_DROPPED_TOTAL",
     "PRINCIPALS_STALE_SERVED_TOTAL",

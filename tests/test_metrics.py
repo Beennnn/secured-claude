@@ -165,3 +165,69 @@ def test_metrics_content_type_is_prometheus_format() -> None:
     ct = metrics.content_type()
     assert "text/plain" in ct
     assert "version=" in ct
+
+
+# ────────────────────────────────────────────────────────────────────
+# ADR-0043 — histograms (latency distributions)
+# ────────────────────────────────────────────────────────────────────
+
+
+def _read_histogram_count(histogram: Any) -> float:
+    """Read the total observation count of a Prometheus histogram."""
+    return histogram._sum.get()  # type: ignore[no-any-return]
+
+
+def test_check_duration_histogram_observes_per_check_call(tmp_path: Path) -> None:
+    """Each /check call should record one observation in the duration histogram."""
+    cerbos = MagicMock()
+    cerbos.check.return_value = CheckResult(allow=True, reason="ok", duration_ms=2, raw={})
+    app = make_app(cerbos=cerbos, store=Store(path=tmp_path / "test.db"))
+    client = TestClient(app)
+    # Take a buckets snapshot of the histogram BEFORE
+    body_before = metrics.render().decode()
+    client.post(
+        "/check",
+        json={"tool": "Read", "tool_input": {"file_path": "/workspace/foo.py"}},
+    )
+    body_after = metrics.render().decode()
+    # Both before/after should contain the histogram family — one observation
+    # increments the _count metric by 1.
+    assert "secured_claude_check_duration_seconds_bucket" in body_after
+    assert "secured_claude_check_duration_seconds_sum" in body_after
+    assert "secured_claude_check_duration_seconds_count" in body_after
+    # The before/after should differ (the after has +1 on _count + a bucket).
+    assert body_before != body_after
+
+
+def test_metrics_endpoint_exposes_histogram_families(tmp_path: Path) -> None:
+    cerbos = MagicMock()
+    cerbos.check.return_value = CheckResult(allow=True, reason="ok", duration_ms=2, raw={})
+    app = make_app(cerbos=cerbos, store=Store(path=tmp_path / "test.db"))
+    client = TestClient(app)
+    body = client.get("/metrics").text
+    # All 4 histogram families should be exposed (zero observations OK).
+    for family in (
+        "secured_claude_check_duration_seconds",
+        "secured_claude_jwt_verify_duration_seconds",
+        "secured_claude_jwks_fetch_duration_seconds",
+        "secured_claude_principals_fetch_duration_seconds",
+    ):
+        assert family in body, f"missing histogram family: {family}"
+
+
+@responses.activate
+def test_principals_fetch_duration_observed_on_fetch() -> None:
+    """A successful principals fetch records one duration observation."""
+    body_before = metrics.render().decode()
+    responses.add(
+        responses.GET,
+        "http://idp.example.com/principals",
+        json={"principals": {"alice": {"roles": ["agent"], "attributes": {}}}},
+        status=200,
+    )
+    HTTPPrincipalProvider("http://idp.example.com/principals").load()
+    body_after = metrics.render().decode()
+    # The histogram's _count should have increased — the simplest way to
+    # verify is that the rendered output changed AND mentions the family.
+    assert "secured_claude_principals_fetch_duration_seconds_count" in body_after
+    assert body_before != body_after

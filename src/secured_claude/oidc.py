@@ -175,14 +175,15 @@ class OIDCVerifier:
         if not jwks_uri:
             return self._jwks
         try:
-            resp = requests.get(
-                jwks_uri,
-                timeout=self.timeout_s,
-                headers=self._headers(),
-                cert=self._cert_kwarg(),
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            with metrics.JWKS_FETCH_DURATION_SECONDS.time():
+                resp = requests.get(
+                    jwks_uri,
+                    timeout=self.timeout_s,
+                    headers=self._headers(),
+                    cert=self._cert_kwarg(),
+                )
+                resp.raise_for_status()
+                data = resp.json()
         except (requests.RequestException, json.JSONDecodeError, ValueError):
             log.exception("OIDC JWKS fetch failed at %s", jwks_uri)
             metrics.JWKS_FETCH_TOTAL.labels(outcome="error").inc()
@@ -231,6 +232,11 @@ class OIDCVerifier:
         not past, `aud` matches configured audience (if set). Uses the
         IdP's JWKS via OIDC discovery.
         """
+        # ADR-0043 — observe verify_token latency (sig + iss + exp + aud + kid).
+        with metrics.JWT_VERIFY_DURATION_SECONDS.time():
+            return self._verify_token_inner(token)
+
+    def _verify_token_inner(self, token: str) -> dict[str, Any] | None:
         if not token:
             metrics.JWT_VERIFY_TOTAL.labels(outcome="rejected_other").inc()
             return None

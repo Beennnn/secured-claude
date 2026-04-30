@@ -178,13 +178,14 @@ class HTTPPrincipalProvider(PrincipalProvider):
             headers["Authorization"] = f"Bearer {self.bearer_token}"
 
         try:
-            resp = requests.get(
-                self.url,
-                timeout=self.timeout_s,
-                headers=headers,
-                cert=self._cert_kwarg(),
-            )
-            resp.raise_for_status()
+            with metrics.PRINCIPALS_FETCH_DURATION_SECONDS.time():
+                resp = requests.get(
+                    self.url,
+                    timeout=self.timeout_s,
+                    headers=headers,
+                    cert=self._cert_kwarg(),
+                )
+                resp.raise_for_status()
         except requests.RequestException:
             log.exception("principals URL %s unreachable", self.url)
             metrics.PRINCIPALS_FETCH_TOTAL.labels(outcome="error").inc()

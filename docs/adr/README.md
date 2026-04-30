@@ -54,6 +54,7 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0040](0040-mtls-client-cert-on-idp-fetches.md) | mTLS client cert/key on IdP fetches | `client_cert_path` + `client_key_path` pair on both providers ; closes the v0.7 mTLS ticket ; covers the residual ~20% of IdP integrations beyond bearer (PKI-backed enterprises, gov enclaves, HSM-backed keys) |
 | [0041](0041-multi-issuer-allowlist.md) | Multi-issuer ALLOWLIST | `MultiIssuerVerifier` wraps N OIDCVerifiers ; comma-separated `SECURED_CLAUDE_IDP_ISSUER` activates ; routes tokens by `iss` claim ; unlocks multi-tenant SaaS, M&A migration windows, hybrid cloud, DR failover |
 | [0042](0042-prometheus-metrics.md) | Prometheus counters + `/metrics` endpoint | 9 counter families across providers + verifiers + gateway ; operators alert on JWT-deny / JWKS-degraded / stale-dropped / cerbos-unavailable rates without log scraping ; loopback-only same trust boundary as `/check` |
+| [0043](0043-prometheus-histograms.md) | Prometheus histograms for latency distributions | 4 histograms (check / jwt_verify / jwks_fetch / principals_fetch) with custom-tuned buckets ; operators build SLO alerts on p99 latency breaches ; per-stage attribution when `/check` is slow |
 
 ### Operational envelope (where the code lives, how it's shipped)
 
