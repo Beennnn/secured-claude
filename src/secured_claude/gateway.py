@@ -150,6 +150,12 @@ def make_app(
 
     @app.post("/check", response_model=CheckResponse)
     def check(req: CheckRequest) -> CheckResponse:
+        # ADR-0043 — observe end-to-end /check latency for SLO tracking.
+        # The `time` block covers JWT verify + Cerbos check + audit insert.
+        with metrics.CHECK_DURATION_SECONDS.time():
+            return _check(req)
+
+    def _check(req: CheckRequest) -> CheckResponse:
         kind, rid, action, attr = map_tool_to_resource(req.tool, req.tool_input)
 
         # ADR-0038 : if a JWT is presented AND a verifier is configured,
