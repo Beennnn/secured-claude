@@ -204,6 +204,29 @@ build:image:broker:arm64:
       --cache-ttl=24h
       --cache-repo="${CI_REGISTRY_IMAGE}/broker-cache"
 
+# Cerbos (ADR-0036) — wraps cerbos/cerbos:0.42.0 with policies + config
+# baked in. Same DinD-bind-mount fix as ADR-0035 for the sidecars.
+build:image:cerbos:
+  extends: .kaniko-build-base
+  variables:
+    IMAGE_NAME: "cerbos"
+    DOCKERFILE: "Dockerfile.cerbos"
+    ARCH: "amd64"
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_BRANCH == "dev"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+build:image:cerbos:arm64:
+  extends: .kaniko-build-base
+  variables:
+    IMAGE_NAME: "cerbos"
+    DOCKERFILE: "Dockerfile.cerbos"
+    ARCH: "arm64"
+  rules:
+    - if: $CI_COMMIT_TAG
+
 # ---------------------------------------------------------------------------
 # arm64 builds — tag-only (cheap iteration loops stay amd64-only).
 # Native on the macbook-local runner ; no QEMU emulation needed.
@@ -259,6 +282,8 @@ build:image:manifest:
     - build:image:egress-proxy:arm64
     - build:image:broker
     - build:image:broker:arm64
+    - build:image:cerbos
+    - build:image:cerbos:arm64
   variables:
     CRANE_VERSION: "0.20.5"
   script:
@@ -277,7 +302,7 @@ build:image:manifest:
     - |
       # For each image, combine the amd64 + arm64 manifests into a
       # manifest-list under :${TAG} (and :${SHA} for traceability).
-      for img in claude-code dns-filter egress-proxy broker; do
+      for img in claude-code dns-filter egress-proxy broker cerbos; do
         echo "===== $img : amd64 + arm64 → manifest list ====="
         crane index append \
           -m "${CI_REGISTRY_IMAGE}/${img}:${CI_COMMIT_TAG}-amd64" \

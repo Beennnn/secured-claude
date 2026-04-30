@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1.7
+# Custom cerbos image — wraps cerbos/cerbos:0.42.0 with the project's
+# policies + config baked in (ADR-0036). Closes the v0.5.4 smoke:full-stack
+# regression caused by the same Docker-in-Docker bind-mount limitation that
+# ADR-0035 fixed for dns-filter + egress-proxy.
+#
+# Production posture per ADR-0001 : Cerbos PDP ; this image is the same
+# binary, just with the project's policies pre-loaded so docker-compose
+# doesn't need bind-mounts.
+
+FROM cerbos/cerbos:0.42.0@sha256:4302b6ce74fec48f8842bd5fc250b4a7d416fb825e06d86d35c3794ed73182f2
+
+# Bake the project policies + cerbos config. Same `policies/` source as
+# the v0.4 bind-mount path. Operators who need a per-deployment override
+# add a docker-compose.override.yml with their own bind-mount.
+COPY policies /policies
+COPY cerbos/config.yaml /etc/cerbos/config.yaml
+
+# ENTRYPOINT/CMD inherited from the upstream cerbos/cerbos:0.42.0 image
+# (uses /cerbos with --config=/etc/cerbos/config.yaml).
