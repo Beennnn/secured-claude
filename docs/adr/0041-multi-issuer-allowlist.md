@@ -1,7 +1,15 @@
 # 41. Multi-issuer ALLOWLIST for OIDC verification
 
 Date: 2026-04-30
-Status: Accepted
+Status: Accepted (with scope-honesty addendum below)
+
+## Scope honesty (added 2026-04-30 post-review)
+
+**The "multi-tenant SaaS / M&A migration windows / hybrid cloud / DR failover" framing below is speculative for the project's actual use case.** `secured-claude` is a single-user dev tool ; the realistic deployment has ONE IdP (the user's Auth0 / Okta / GitHub login), not a federation of tenants the broker has to triage.
+
+The wrapper-class implementation (`MultiIssuerVerifier` holding N `OIDCVerifier` instances) is ~50 lines and harmless when only one issuer is configured (factory returns the bare `OIDCVerifier` directly, the wrapper is never instantiated). Single-issuer deployments pay zero overhead.
+
+What's left as honest framing : multi-issuer support is a clean extension point that doesn't break the existing API. The ADR's elaborate use-case justification (M&A, hybrid cloud, DR failover) describes patterns where this WOULD be useful — none of which the project itself targets.
 
 ## Context
 

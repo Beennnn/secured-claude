@@ -1,7 +1,15 @@
 # 44. Per-issuer audience / bearer / mTLS / TTL config
 
 Date: 2026-04-30
-Status: Accepted
+Status: Accepted (with scope-honesty addendum below)
+
+## Scope honesty (added 2026-04-30 post-review)
+
+**The "multi-tenant SaaS with mixed-auth modes" framing below is speculative for the project's actual use case.** `secured-claude` is a single-user dev tool ; the realistic deployment has ONE IdP. Per-issuer JSON config solves a problem (mixed-auth across N tenants) that the project doesn't have.
+
+This ADR is a layer-on-top of ADR-0041's already-speculative multi-issuer support : *if* an operator runs N issuers, *and* those issuers need different audience / bearer / mTLS / TTL, the JSON env lets them configure that. Both conditions are out-of-scope of the project's primary use case ; the code is ~30 lines of permissive JSON parser + a factory loop, no operational risk when unused.
+
+What's left as honest framing : the JSON env is the right abstraction *if* per-issuer config is ever needed. Until then it's documented but unused. The shared envs (`SECURED_CLAUDE_OIDC_AUDIENCE`, etc.) cover 100 % of single-issuer + same-config-across-tenants scenarios — i.e. the realistic deployment.
 
 ## Context
 
