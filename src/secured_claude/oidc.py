@@ -66,12 +66,17 @@ class OIDCVerifier:
         jwks_cache_ttl_s: float = 3600.0,
         timeout_s: float = 5.0,
         bearer_token: str | None = None,
+        max_stale_age_s: float | None = None,
     ) -> None:
         self.issuer = issuer.rstrip("/")
         self.audience = audience
         self.jwks_cache_ttl_s = jwks_cache_ttl_s
         self.timeout_s = timeout_s
         self.bearer_token = bearer_token
+        # ADR-0039 — when set, stale JWKS / discovery older than this drops
+        # back to reject (verify_token returns None). None = no max
+        # (the v0.6.1 behaviour).
+        self.max_stale_age_s = max_stale_age_s
         self._discovery: dict[str, Any] | None = None
         self._discovery_ts: float = 0.0
         self._jwks: dict[str, Any] | None = None
@@ -82,6 +87,25 @@ class OIDCVerifier:
         import time
 
         return time.monotonic()
+
+    def _too_stale(self, ts: float, label: str) -> bool:
+        """If max_stale_age_s is set and `ts` is older than it, return True.
+
+        Helper for the stale-on-error fallback paths. Caller drops the cache
+        and falls back (None) when this returns True.
+        """
+        if self.max_stale_age_s is None or ts == 0.0:
+            return False
+        age = self._now() - ts
+        if age > self.max_stale_age_s:
+            log.warning(
+                "OIDC %s cache age %.1fs > max_stale_age %.1fs ; dropping",
+                label,
+                age,
+                self.max_stale_age_s,
+            )
+            return True
+        return False
 
     def _headers(self) -> dict[str, str]:
         headers: dict[str, str] = {}
@@ -103,9 +127,17 @@ class OIDCVerifier:
             data = resp.json()
         except (requests.RequestException, json.JSONDecodeError, ValueError):
             log.exception("OIDC discovery failed at %s", url)
-            return self._discovery  # serve stale on error if any
+            # Stale-on-error : serve the cached discovery doc IF it hasn't
+            # aged past max_stale_age_s ; otherwise drop it (ADR-0039).
+            if self._too_stale(self._discovery_ts, "discovery"):
+                self._discovery = None
+                self._discovery_ts = 0.0
+            return self._discovery
         if not isinstance(data, dict) or "jwks_uri" not in data:
             log.warning("OIDC discovery at %s missing jwks_uri ; ignoring", url)
+            if self._too_stale(self._discovery_ts, "discovery"):
+                self._discovery = None
+                self._discovery_ts = 0.0
             return self._discovery
         self._discovery = data
         self._discovery_ts = self._now()
@@ -127,8 +159,15 @@ class OIDCVerifier:
             data = resp.json()
         except (requests.RequestException, json.JSONDecodeError, ValueError):
             log.exception("OIDC JWKS fetch failed at %s", jwks_uri)
-            return self._jwks  # serve stale on JWKS error
+            # Stale-on-error : serve cached JWKS IF not too old (ADR-0039).
+            if self._too_stale(self._jwks_ts, "jwks"):
+                self._jwks = None
+                self._jwks_ts = 0.0
+            return self._jwks
         if not isinstance(data, dict) or not isinstance(data.get("keys"), list):
+            if self._too_stale(self._jwks_ts, "jwks"):
+                self._jwks = None
+                self._jwks_ts = 0.0
             return self._jwks
         self._jwks = data
         self._jwks_ts = self._now()
@@ -196,6 +235,7 @@ def make_verifier() -> OIDCVerifier | None:
       * SECURED_CLAUDE_OIDC_JWKS_TTL_S — JWKS cache lifetime.
       * SECURED_CLAUDE_IDP_TIMEOUT_S — HTTP timeout (shared with HTTPPrincipalProvider).
       * SECURED_CLAUDE_IDP_BEARER_TOKEN — optional bearer header on JWKS fetch.
+      * SECURED_CLAUDE_MAX_STALE_AGE_S — max stale-on-error age (None = unbounded ; ADR-0039).
 
     None means JWT verification is disabled — broker falls back to the
     env-based principal_id (the v0.5 / v0.6.0 behaviour).
@@ -215,12 +255,20 @@ def make_verifier() -> OIDCVerifier | None:
     except ValueError:
         timeout = 5.0
     bearer = os.environ.get("SECURED_CLAUDE_IDP_BEARER_TOKEN", "").strip() or None
+    max_stale_raw = os.environ.get("SECURED_CLAUDE_MAX_STALE_AGE_S", "").strip()
+    max_stale: float | None = None
+    if max_stale_raw:
+        try:
+            max_stale = float(max_stale_raw)
+        except ValueError:
+            max_stale = None
     return OIDCVerifier(
         issuer=issuer,
         audience=audience,
         jwks_cache_ttl_s=ttl,
         timeout_s=timeout,
         bearer_token=bearer,
+        max_stale_age_s=max_stale,
     )
 
 

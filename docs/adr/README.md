@@ -50,6 +50,7 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0036](0036-cerbos-image-bake.md) | Bake Cerbos policies into a custom image | FROM cerbos/cerbos:0.42.0 + COPY policies + cerbos/config.yaml ; closes v0.5.4 smoke regression |
 | [0037](0037-http-principals-cache-and-bearer-auth.md) | TTL cache + bearer auth on HTTPPrincipalProvider | 5-min default cache + stale-on-error + Authorization header ; closes the v0.5 deferred IdP tickets ; mTLS still v0.7+ |
 | [0038](0038-jwt-validation-and-oidc-discovery.md) | JWT validation in /check + OIDC discovery | Optional `token` field on `/check` + `OIDCVerifier` that fetches `/.well-known/openid-configuration` + JWKS ; sub claim becomes principal_id ; fail-closed on signature / iss / exp / aud violation |
+| [0039](0039-max-stale-age-for-cache-and-jwks.md) | Max stale-age for cache + JWKS | `max_stale_age_s` caps stale-on-error window ; closes "permanent IdP misconfig serves compromised state forever" ; shared `SECURED_CLAUDE_MAX_STALE_AGE_S` env across both providers |
 
 ### Operational envelope (where the code lives, how it's shipped)
 

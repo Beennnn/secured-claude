@@ -332,3 +332,84 @@ def test_make_provider_invalid_cache_ttl_falls_back_to_default(
     p = make_provider()
     assert isinstance(p, HTTPPrincipalProvider)
     assert p.cache_ttl_s == 300.0  # default
+
+
+# ────────────────────────────────────────────────────────────────────
+# ADR-0039 — max_stale_age_s on HTTPPrincipalProvider
+# ────────────────────────────────────────────────────────────────────
+
+
+@responses.activate
+def test_http_provider_drops_stale_cache_after_max_stale_age(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When stale cache outlives max_stale_age_s, fall back to single-default."""
+    body_ok = {"principals": {"alice": {"roles": ["agent"], "attributes": {"trust_level": 2}}}}
+    responses.add(responses.GET, "http://idp.example.com/principals", json=body_ok, status=200)
+    responses.add(responses.GET, "http://idp.example.com/principals", status=503)
+    responses.add(responses.GET, "http://idp.example.com/principals", status=503)
+    p = HTTPPrincipalProvider(
+        "http://idp.example.com/principals",
+        cache_ttl_s=10.0,
+        max_stale_age_s=20.0,
+    )
+    fake_time = [0.0]
+    monkeypatch.setattr(p, "_now", lambda: fake_time[0])
+    # t=0 : success, cached at ts=0
+    p.load()
+    # t=15 : TTL expired (10) but cache age 15 < max_stale_age (20) → stale serve
+    fake_time[0] = 15.0
+    out = p.load()
+    assert "alice" in out, "still within max_stale_age, should serve stale"
+    # t=35 : cache age 35 > max_stale_age (20) → drop + single-default fallback
+    fake_time[0] = 35.0
+    out = p.load()
+    assert out == {DEFAULT_PRINCIPAL_ID: DEFAULT_PRINCIPAL}
+    assert p._cache is None, "cache should be dropped after max-stale exceeded"
+
+
+@responses.activate
+def test_http_provider_max_stale_age_none_serves_forever(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """max_stale_age_s=None preserves v0.6.1 behaviour (stale forever)."""
+    body_ok = {"principals": {"alice": {"roles": ["agent"], "attributes": {"trust_level": 2}}}}
+    responses.add(responses.GET, "http://idp.example.com/principals", json=body_ok, status=200)
+    responses.add(responses.GET, "http://idp.example.com/principals", status=503)
+    p = HTTPPrincipalProvider(
+        "http://idp.example.com/principals",
+        cache_ttl_s=10.0,
+        max_stale_age_s=None,
+    )
+    fake_time = [0.0]
+    monkeypatch.setattr(p, "_now", lambda: fake_time[0])
+    p.load()
+    fake_time[0] = 1_000_000.0  # extreme age
+    out = p.load()
+    assert "alice" in out, "max_stale_age=None means stale-forever (v0.6.1 default)"
+
+
+def test_make_provider_picks_up_max_stale_age_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_URL", "http://idp.example.com/principals")
+    monkeypatch.setenv("SECURED_CLAUDE_MAX_STALE_AGE_S", "300")
+    p = make_provider()
+    assert isinstance(p, HTTPPrincipalProvider)
+    assert p.max_stale_age_s == 300.0
+
+
+def test_make_provider_max_stale_age_unset_means_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SECURED_CLAUDE_MAX_STALE_AGE_S", raising=False)
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_URL", "http://idp.example.com/principals")
+    p = make_provider()
+    assert isinstance(p, HTTPPrincipalProvider)
+    assert p.max_stale_age_s is None
+
+
+def test_make_provider_max_stale_age_invalid_falls_back_to_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_URL", "http://idp.example.com/principals")
+    monkeypatch.setenv("SECURED_CLAUDE_MAX_STALE_AGE_S", "not-a-number")
+    p = make_provider()
+    assert isinstance(p, HTTPPrincipalProvider)
+    assert p.max_stale_age_s is None
