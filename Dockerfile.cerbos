@@ -16,5 +16,12 @@ FROM cerbos/cerbos:0.42.0@sha256:4302b6ce74fec48f8842bd5fc250b4a7d416fb825e06d86
 COPY policies /policies
 COPY cerbos/config.yaml /etc/cerbos/config.yaml
 
+# Run as non-root (Trivy DS-0002 satisfied). uid 1001 matches what the
+# v0.4 docker-compose.yml's `user: "1001:1001"` set ; cerbos/cerbos's
+# distroless base supports this — the binary doesn't need root, only
+# read access to /policies + /etc/cerbos which we just COPYed as root
+# but with mode 0644 by default.
+USER 1001:1001
+
 # ENTRYPOINT/CMD inherited from the upstream cerbos/cerbos:0.42.0 image
 # (uses /cerbos with --config=/etc/cerbos/config.yaml).
