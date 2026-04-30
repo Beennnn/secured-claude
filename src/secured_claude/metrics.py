@@ -121,14 +121,16 @@ CHECK_DECISIONS_TOTAL = Counter(
 
 
 # ────────────────────────────────────────────────────────────────────
-# Histograms (ADR-0043) — latency distributions for SLO tracking
+# Histograms (ADR-0043) — latency distributions for diagnostics
 # ────────────────────────────────────────────────────────────────────
 #
-# Why histograms in addition to counters : counters tell operators
-# "is something failing ?" ; histograms tell them "is something
-# *slow* ?". The hook latency budget is 50 ms p99 (ADR-0002) ; alerts
-# on `histogram_quantile(0.99, rate(check_duration_seconds_bucket[5m]))`
-# fire when that contract drifts.
+# Why histograms in addition to counters : counters answer "is
+# something failing ?" ; histograms answer "is something *slow* ?".
+# The 50 ms p99 reference from ADR-0002 is an aspirational latency
+# target (a hook that hangs annoys Claude Code), not a contractual
+# SLO. For the realistic single-user-dev-tool deployment, these
+# histograms are diagnostic ("curl /metrics | grep duration_seconds")
+# rather than SLO-alerting infrastructure.
 #
 # Buckets are tuned to the broker's actual operating range (sub-50ms
 # typical) — Prometheus's default buckets (5ms .. 10s) are too wide
