@@ -80,6 +80,7 @@ build:python:
       --cache=true
       --cache-ttl=24h
       --cache-repo="${CI_REGISTRY_IMAGE}/${IMAGE_NAME}-cache"
+      --registry-mirror=mirror.gcr.io
 
 # ---------------------------------------------------------------------------
 # amd64 builds — run on every dev / MR / main / tag pipeline.
@@ -175,6 +176,7 @@ build:image:broker:
       --cache=true
       --cache-ttl=24h
       --cache-repo="${CI_REGISTRY_IMAGE}/broker-cache"
+      --registry-mirror=mirror.gcr.io
 
 build:image:broker:arm64:
   stage: build
@@ -203,6 +205,7 @@ build:image:broker:arm64:
       --cache=true
       --cache-ttl=24h
       --cache-repo="${CI_REGISTRY_IMAGE}/broker-cache"
+      --registry-mirror=mirror.gcr.io
 
 # Cerbos (ADR-0036) — wraps cerbos/cerbos:0.42.0 with policies + config
 # baked in. Same DinD-bind-mount fix as ADR-0035 for the sidecars.
