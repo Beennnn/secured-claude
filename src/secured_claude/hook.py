@@ -41,6 +41,10 @@ def main() -> None:
     broker_url = f"{broker_base}/check"
     timeout_s = float(os.environ.get("SECURED_CLAUDE_TIMEOUT", "2.0"))
     principal_id = os.environ.get("SECURED_CLAUDE_PRINCIPAL", "claude-code-default")
+    # ADR-0038 — when the agent runs with a JWT (operator injects it via
+    # docker secret / env / file), the hook forwards the token in the
+    # POST body. Empty / unset = the broker uses principal_id as-is.
+    agent_token = os.environ.get("SECURED_CLAUDE_AGENT_TOKEN", "").strip()
 
     raw = sys.stdin.read()
     try:
@@ -53,12 +57,14 @@ def main() -> None:
     tool_input = data.get("tool_input") or data.get("input") or {}
     session_id = str(data.get("session_id", "unknown-session"))
 
-    body = {
+    body: dict[str, Any] = {
         "tool": tool,
         "tool_input": tool_input,
         "principal_id": principal_id,
         "session_id": session_id,
     }
+    if agent_token:
+        body["token"] = agent_token
 
     try:
         resp = requests.post(broker_url, json=body, timeout=timeout_s)

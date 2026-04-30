@@ -45,6 +45,7 @@ dependencies = [
     "requests>=2.32.0",
     "pyyaml>=6.0",
     "rich>=13.9.0",
+    "pyjwt[crypto]>=2.10.0",
 ]
 
 [project.optional-dependencies]

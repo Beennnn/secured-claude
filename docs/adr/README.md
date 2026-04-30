@@ -49,6 +49,7 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0035](0035-bake-sidecar-configs.md) | Bake sidecar configs into the images | COPY dnsmasq.conf + tinyproxy.conf + filter.txt into the images ; drop v0.5.3 allow_failure on smoke:full-stack |
 | [0036](0036-cerbos-image-bake.md) | Bake Cerbos policies into a custom image | FROM cerbos/cerbos:0.42.0 + COPY policies + cerbos/config.yaml ; closes v0.5.4 smoke regression |
 | [0037](0037-http-principals-cache-and-bearer-auth.md) | TTL cache + bearer auth on HTTPPrincipalProvider | 5-min default cache + stale-on-error + Authorization header ; closes the v0.5 deferred IdP tickets ; mTLS still v0.7+ |
+| [0038](0038-jwt-validation-and-oidc-discovery.md) | JWT validation in /check + OIDC discovery | Optional `token` field on `/check` + `OIDCVerifier` that fetches `/.well-known/openid-configuration` + JWKS ; sub claim becomes principal_id ; fail-closed on signature / iss / exp / aud violation |
 
 ### Operational envelope (where the code lives, how it's shipped)
 
