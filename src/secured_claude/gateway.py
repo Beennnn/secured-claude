@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from secured_claude import __version__
 from secured_claude.cerbos_client import CerbosClient, CheckResult
-from secured_claude.oidc import OIDCVerifier, make_verifier
+from secured_claude.oidc import MultiIssuerVerifier, OIDCVerifier, make_verifier
 from secured_claude.principals import (
     DEFAULT_PRINCIPAL as _DEFAULT_PRINCIPAL,
 )
@@ -132,7 +132,7 @@ def make_app(
     cerbos: CerbosClient | None = None,
     store: Store | None = None,
     principals: dict[str, dict[str, Any]] | None = None,
-    verifier: OIDCVerifier | None = None,
+    verifier: OIDCVerifier | MultiIssuerVerifier | None = None,
 ) -> FastAPI:
     """Build the FastAPI app. Test code injects mocks via `cerbos` and `store`."""
     cerbos_client = cerbos or CerbosClient(

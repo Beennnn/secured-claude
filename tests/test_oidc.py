@@ -17,7 +17,7 @@ import responses
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from secured_claude.oidc import OIDCVerifier, make_verifier
+from secured_claude.oidc import MultiIssuerVerifier, OIDCVerifier, make_verifier
 
 ISSUER = "https://idp.example.com"
 DISCOVERY_URL = f"{ISSUER}/.well-known/openid-configuration"
@@ -636,5 +636,139 @@ def test_make_verifier_mtls_partial_env_treated_as_unset(
     monkeypatch.setenv("SECURED_CLAUDE_IDP_CLIENT_CERT_PATH", "/etc/ssl/client.crt")
     monkeypatch.delenv("SECURED_CLAUDE_IDP_CLIENT_KEY_PATH", raising=False)
     v = make_verifier()
-    assert v is not None
+    assert isinstance(v, OIDCVerifier)
     assert v._cert_kwarg() is None
+
+
+# ────────────────────────────────────────────────────────────────────
+# ADR-0041 — MultiIssuerVerifier (multi-issuer ALLOWLIST)
+# ────────────────────────────────────────────────────────────────────
+
+
+ISSUER_A = "https://idp-a.example.com"
+ISSUER_B = "https://idp-b.example.com"
+DISCOVERY_A = f"{ISSUER_A}/.well-known/openid-configuration"
+DISCOVERY_B = f"{ISSUER_B}/.well-known/openid-configuration"
+JWKS_A = f"{ISSUER_A}/jwks.json"
+JWKS_B = f"{ISSUER_B}/jwks.json"
+
+
+def test_multi_issuer_verifier_requires_at_least_one_verifier() -> None:
+    with pytest.raises(ValueError):
+        MultiIssuerVerifier([])
+
+
+def test_multi_issuer_verifier_lists_issuers() -> None:
+    v_a = OIDCVerifier(issuer=ISSUER_A)
+    v_b = OIDCVerifier(issuer=ISSUER_B)
+    multi = MultiIssuerVerifier([v_a, v_b])
+    assert ISSUER_A in multi.issuers
+    assert ISSUER_B in multi.issuers
+
+
+@responses.activate
+def test_multi_issuer_routes_to_correct_verifier(
+    rsa_key_pair: tuple[Any, Any], jwks_payload: dict[str, Any]
+) -> None:
+    """Token signed by issuer A → verifier A's JWKS used ; same for B."""
+    private, _public = rsa_key_pair
+    # Both issuers serve the same key (test simplicity) ; what matters is
+    # that the right issuer's discovery + JWKS get hit.
+    responses.add(responses.GET, DISCOVERY_A, json={"jwks_uri": JWKS_A}, status=200)
+    responses.add(responses.GET, JWKS_A, json=jwks_payload, status=200)
+    responses.add(responses.GET, DISCOVERY_B, json={"jwks_uri": JWKS_B}, status=200)
+    responses.add(responses.GET, JWKS_B, json=jwks_payload, status=200)
+
+    token_a = _sign(private, {"iss": ISSUER_A, "sub": "alice", "exp": int(time.time()) + 60})
+    token_b = _sign(private, {"iss": ISSUER_B, "sub": "bob", "exp": int(time.time()) + 60})
+    multi = MultiIssuerVerifier([OIDCVerifier(issuer=ISSUER_A), OIDCVerifier(issuer=ISSUER_B)])
+    claims_a = multi.verify_token(token_a)
+    assert claims_a is not None and claims_a["sub"] == "alice"
+    claims_b = multi.verify_token(token_b)
+    assert claims_b is not None and claims_b["sub"] == "bob"
+
+
+def test_multi_issuer_rejects_token_with_iss_not_in_allowlist(
+    rsa_key_pair: tuple[Any, Any],
+) -> None:
+    private, _public = rsa_key_pair
+    multi = MultiIssuerVerifier([OIDCVerifier(issuer=ISSUER_A), OIDCVerifier(issuer=ISSUER_B)])
+    token = _sign(
+        private,
+        {"iss": "https://attacker.example.com", "sub": "evil", "exp": int(time.time()) + 60},
+    )
+    assert multi.verify_token(token) is None
+
+
+def test_multi_issuer_rejects_empty_token() -> None:
+    multi = MultiIssuerVerifier([OIDCVerifier(issuer=ISSUER_A)])
+    assert multi.verify_token("") is None
+
+
+def test_multi_issuer_rejects_garbage_token() -> None:
+    multi = MultiIssuerVerifier([OIDCVerifier(issuer=ISSUER_A)])
+    assert multi.verify_token("not.a.jwt") is None
+
+
+def test_multi_issuer_rejects_token_without_iss(rsa_key_pair: tuple[Any, Any]) -> None:
+    private, _public = rsa_key_pair
+    pem = private.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    token = jwt.encode(
+        {"sub": "alice", "exp": int(time.time()) + 60},
+        pem,
+        algorithm="RS256",
+        headers={"kid": KID},
+    )
+    multi = MultiIssuerVerifier([OIDCVerifier(issuer=ISSUER_A)])
+    assert multi.verify_token(token) is None
+
+
+def test_make_verifier_returns_multi_for_comma_separated_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "SECURED_CLAUDE_IDP_ISSUER",
+        f"{ISSUER_A},{ISSUER_B}",
+    )
+    v = make_verifier()
+    assert isinstance(v, MultiIssuerVerifier)
+    assert ISSUER_A in v.issuers
+    assert ISSUER_B in v.issuers
+
+
+def test_make_verifier_returns_single_for_one_issuer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_ISSUER", ISSUER_A)
+    v = make_verifier()
+    # Single-issuer config returns a bare OIDCVerifier (back-compat)
+    assert isinstance(v, OIDCVerifier)
+    assert v.issuer == ISSUER_A
+
+
+def test_make_verifier_strips_trailing_slashes_in_multi_issuer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "SECURED_CLAUDE_IDP_ISSUER",
+        f"{ISSUER_A}/, {ISSUER_B}/",
+    )
+    v = make_verifier()
+    assert isinstance(v, MultiIssuerVerifier)
+    # Trailing slashes stripped + whitespace tolerated
+    assert ISSUER_A in v.issuers
+    assert ISSUER_B in v.issuers
+
+
+def test_make_verifier_blank_issuer_in_csv_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`a,,b` → 2 issuers, the empty entry silently dropped."""
+    monkeypatch.setenv("SECURED_CLAUDE_IDP_ISSUER", f"{ISSUER_A},,{ISSUER_B}")
+    v = make_verifier()
+    assert isinstance(v, MultiIssuerVerifier)
+    assert len(v.issuers) == 2
