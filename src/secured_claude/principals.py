@@ -112,22 +112,65 @@ class HTTPPrincipalProvider(PrincipalProvider):
     receives no error ; only the broker logs the issue. This matches the
     YAML provider's fail-open semantics + the broker contract from ADR-0027.
 
-    v0.5 limitation : the broker does NOT cache the result. Every gateway
-    startup hits the URL once. v0.6 ticket : add a TTL-based cache so a
-    cold-startup burst doesn't hammer the IdP.
+    v0.6 (ADR-0037) — adds:
+      * TTL cache : within the lifetime of the provider, repeat `load()`
+        calls within `cache_ttl_s` seconds reuse the previous response.
+        After the TTL expires, the next `load()` re-fetches.
+      * Bearer auth : optional `bearer_token` is sent as
+        `Authorization: Bearer <token>` so the IdP URL can sit behind
+        an authenticated endpoint.
+      * Stale-on-error : if the upstream IdP returns 5xx / unreachable
+        AND we have a cached response, return the stale cache rather
+        than the single-default fallback. Trades freshness for
+        availability — operators with central-IdP outages get the last
+        known-good directory instead of a degraded default.
     """
 
-    def __init__(self, url: str, timeout_s: float = 5.0) -> None:
+    def __init__(
+        self,
+        url: str,
+        timeout_s: float = 5.0,
+        cache_ttl_s: float = 300.0,
+        bearer_token: str | None = None,
+    ) -> None:
         self.url = url
         self.timeout_s = timeout_s
+        self.cache_ttl_s = cache_ttl_s
+        self.bearer_token = bearer_token
+        self._cache: dict[str, dict[str, Any]] | None = None
+        self._cache_ts: float = 0.0
+
+    def _now(self) -> float:
+        # Indirection so tests can monkeypatch time.
+        import time
+
+        return time.monotonic()
 
     def load(self) -> dict[str, dict[str, Any]]:
+        # Cache hit : within TTL, reuse the last successful response.
+        if self._cache is not None and (self._now() - self._cache_ts) < self.cache_ttl_s:
+            return self._cache
+
+        headers: dict[str, str] = {}
+        if self.bearer_token:
+            headers["Authorization"] = f"Bearer {self.bearer_token}"
+
         try:
-            resp = requests.get(self.url, timeout=self.timeout_s)
+            resp = requests.get(self.url, timeout=self.timeout_s, headers=headers)
             resp.raise_for_status()
         except requests.RequestException:
-            log.exception("principals URL %s unreachable ; using single-default fallback", self.url)
+            log.exception("principals URL %s unreachable", self.url)
+            # Stale-on-error : prefer the last known-good cache over a
+            # default-only fallback. Loud log so operators know.
+            if self._cache is not None:
+                log.warning(
+                    "principals URL %s unreachable ; serving stale cache (age %.1fs)",
+                    self.url,
+                    self._now() - self._cache_ts,
+                )
+                return self._cache
             return _fallback()
+
         # Accept JSON or YAML — same parse path either way.
         body = resp.text
         try:
@@ -141,8 +184,18 @@ class HTTPPrincipalProvider(PrincipalProvider):
                 "principals URL %s body is neither valid JSON nor valid YAML ; using fallback",
                 self.url,
             )
+            if self._cache is not None:
+                return self._cache
             return _fallback()
-        return _parse_principals_dict(data, source=self.url)
+
+        parsed = _parse_principals_dict(data, source=self.url)
+        # Cache successful responses only. A fallback (e.g. response was
+        # 200 OK but the body had no `principals:` key) bypasses the cache
+        # so the next call retries.
+        if parsed != _fallback():
+            self._cache = parsed
+            self._cache_ts = self._now()
+        return parsed
 
 
 def _parse_principals_dict(data: Any, *, source: str) -> dict[str, dict[str, Any]]:
@@ -167,6 +220,9 @@ def make_provider() -> PrincipalProvider:
 
     Resolution order :
       1. SECURED_CLAUDE_IDP_URL set + non-empty → HTTPPrincipalProvider
+         * SECURED_CLAUDE_IDP_TIMEOUT_S — request timeout (default 5.0)
+         * SECURED_CLAUDE_IDP_CACHE_TTL_S — cache lifetime (default 300)
+         * SECURED_CLAUDE_IDP_BEARER_TOKEN — Authorization: Bearer <token>
       2. SECURED_CLAUDE_PRINCIPALS env or default config/principals.yaml
          → YAMLPrincipalProvider
     """
@@ -177,7 +233,18 @@ def make_provider() -> PrincipalProvider:
             timeout = float(timeout_str)
         except ValueError:
             timeout = 5.0
-        return HTTPPrincipalProvider(url, timeout_s=timeout)
+        ttl_str = os.environ.get("SECURED_CLAUDE_IDP_CACHE_TTL_S", "300.0")
+        try:
+            ttl = float(ttl_str)
+        except ValueError:
+            ttl = 300.0
+        bearer = os.environ.get("SECURED_CLAUDE_IDP_BEARER_TOKEN", "").strip() or None
+        return HTTPPrincipalProvider(
+            url,
+            timeout_s=timeout,
+            cache_ttl_s=ttl,
+            bearer_token=bearer,
+        )
     yaml_path = Path(os.environ.get("SECURED_CLAUDE_PRINCIPALS", "config/principals.yaml"))
     return YAMLPrincipalProvider(yaml_path)
 
