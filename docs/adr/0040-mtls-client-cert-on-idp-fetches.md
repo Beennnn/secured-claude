@@ -1,7 +1,15 @@
 # 40. mTLS client cert/key on IdP fetches (principals + JWKS + discovery)
 
 Date: 2026-04-30
-Status: Accepted
+Status: Accepted (with scope-honesty addendum below)
+
+## Scope honesty (added 2026-04-30 post-review)
+
+**The "Government / military enclaves / PKI / HSM" framing below is speculative for the project's actual use case.** `secured-claude` is a single-user dev tool ; the realistic IdP shape for a personal deployment is "Auth0 / Okta / GitHub Actions OIDC, optionally behind a bearer token", not a PKI-backed internal IdP with mTLS-only auth.
+
+The mTLS code itself is small (~30 lines : 2 env vars + a `requests cert=` kwarg pass-through) and harmless when unset (default `None` → no mTLS). Operators with the rare PKI-backed deployment have it ; the rest ignore it.
+
+What's left as honest framing : the `cert=` kwarg pass-through is a 30-line hygiene addition that makes the broker more deployable in environments where bearer tokens aren't allowed. The ADR's elaborate threat-model justification (zero-trust enclaves, HSM-backed keys, cert rotation atomicity) is `if you happen to need this, here's how the abstractions hold up`, not `the project's primary use case`.
 
 ## Context
 
