@@ -79,17 +79,11 @@ smoke:full-stack:
   stage: smoke
   image: docker:24-cli
   rules:
-    # Docker-in-Docker bind-mount limitation : the macbook-local runner
-    # shares the host's docker daemon ; bind-mounts of paths in the CI
-    # workspace (/builds/...) fail because the host daemon only sees
-    # /Users/.... v0.5.3 fix is to bake the dnsmasq.conf + tinyproxy.conf
-    # into the sidecar images at build time so no bind mount is needed ;
-    # then drop allow_failure here. The same bin/test-full-stack.sh works
-    # locally (verified — 2/2 PASS in v0.5.0 commit message).
-    # TODO remove allow_failure by 2026-05-15 — when v0.5.3 bakes
-    # configs into sidecar images.
+    # v0.5.4 dropped allow_failure : configs are now baked into the sidecar
+    # images (ADR-0035), so docker compose up no longer needs the
+    # /builds/... bind-mounts that broke under Docker-in-Docker. The job
+    # gates the release pipeline as designed.
     - if: $CI_COMMIT_TAG
-      allow_failure: true
   needs:
     - build:image
     - build:image:dns-filter
