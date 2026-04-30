@@ -1,15 +1,23 @@
 # 43. Prometheus histograms for latency distributions
 
 Date: 2026-04-30
-Status: Accepted
+Status: Accepted (with scope-honesty addendum below)
+
+## Scope honesty (added 2026-04-30 post-review)
+
+**This ADR was originally written with multi-burn-rate-SLO framing, which is a misfit for the project's actual use case.** `secured-claude` is a single-user dev tool : one developer on their laptop, a loopback HTTP broker, ~tens of `/check` calls per minute at most. There is no operator team, no Grafana dashboard, no on-call rotation.
+
+The histograms themselves are still useful for **diagnostics** — `curl /metrics | grep duration_seconds` answers "is the broker slow ?" when a developer is troubleshooting. ADR-0002's 50 ms p99 latency reference is an aspirational target (a hook that hangs annoys Claude Code), not a contractual SLO with burn-rate alerts.
+
+The "Decision" section below keeps the implementation as-shipped (4 histogram families with custom-tuned buckets — no harm in having them) but the surrounding "operator alerts on SLO breach" framing is **speculative for a personal-proxy deployment**. Operators running `secured-claude` in a centralised broker pattern (cluster of agents pointing at a shared broker — out-of-scope of the v0.1 design but possible to deploy) might use the histograms for SLO tracking ; everyone else uses them for ad-hoc latency debugging.
 
 ## Context
 
-[ADR-0042](0042-prometheus-metrics.md) added 9 counter families covering every documented failure mode. Counters answer "is something failing ?" but not "is something *slow* ?". Several v0.6 → v0.7 design decisions imply latency contracts that need their own observability :
+[ADR-0042](0042-prometheus-metrics.md) added 9 counter families covering every documented failure mode. Counters answer "is something failing ?" but not "is something *slow* ?". The histograms below answer the second question.
 
-- **Hook latency budget** : ADR-0002 sets a 50 ms p99 target for the entire `/check` round-trip. Operators need to know if a JWKS rotation lag, a slow Cerbos PDP, or a tight stale-age bound is pushing real-world latency past that.
-- **JWKS fetch is the slowest path** : on cache miss, the broker hits the IdP over HTTP. Auth0 / Okta / GitHub Actions OIDC have published latency expectations (~100–500 ms p99). When the broker observes substantially worse, that's an operator signal independent of the binary fetch_total{outcome=error} counter.
-- **Per-stage attribution** : when `/check` p99 spikes, operators want to know *which* stage : was it JWT verify ? JWKS fetch ? Cerbos ? Audit insert ? Histograms per-stage tell that story ; a single end-to-end histogram doesn't.
+- **Latency reference** : ADR-0002 cites 50 ms p99 as the round-trip target — a hook that takes longer than a perceptible blink interrupts the developer's flow with Claude Code. A diagnostic ratio of "how often does my broker exceed 50 ms ?" is useful to detect a slow IdP / Cerbos / audit-DB without log digging.
+- **JWKS fetch is the slowest path** : on cache miss, the broker hits the IdP over HTTP. ~100–500 ms typical for a healthy IdP ; substantially worse points at the IdP-side or network layer.
+- **Per-stage attribution** : when `/check` is slow, *which* stage caused it ? Histograms per-stage tell that story.
 
 ## Decision
 
@@ -65,9 +73,10 @@ A `with metrics.X.time():` block records the wall-clock duration when it exits (
 ## Consequences
 
 **Positive** :
-- Operators can build SLO dashboards : `histogram_quantile(0.99, rate(check_duration_seconds_bucket[5m]))` against the 50 ms target. When the p99 drifts past 0.05, page the on-call.
-- Per-stage attribution : when `/check` p99 spikes, the JWT/JWKS/principals histograms tell operators which stage caused it without log digging.
-- Slow-failure visibility : a `RequestException` caught in the JWKS fetch still observes its duration (the `with .time():` block fires on exit even on exception). Operators see the timeout pattern.
+- Diagnostic visibility : `curl /metrics | grep duration_seconds` answers "is the broker slow ?" when troubleshooting. No log digging.
+- Per-stage attribution : when `/check` is slow, the JWT/JWKS/principals histograms isolate the cause.
+- Slow-failure visibility : a `RequestException` caught in the JWKS fetch still observes its duration (the `with .time():` block fires on exit even on exception).
+- For the rare deployment running the broker in a centralised pattern (cluster of agents → shared broker), operators CAN build the standard `histogram_quantile()` SLO dashboards. Out-of-scope of v0.1 design but the data is there.
 - 3 new tests verify the histogram families are exposed + observations record per call. Total now 240 tests (was 237 in v0.7.2).
 - Backward-compatible : pure additive, no behaviour change.
 
@@ -112,36 +121,17 @@ secured_claude_check_duration_seconds_bucket{le="0.005"} 87.0
 secured_claude_check_duration_seconds_bucket{le="0.01"} 98.0
 secured_claude_check_duration_seconds_bucket{le="0.02"} 100.0
 ...
-$ # Operator runbook : alert when histogram_quantile(0.99, ...) > 0.05
+$ # Diagnostic : if check_duration_seconds_count grows but the bucket
+$ # distribution shifts toward the high end, broker is getting slow.
 ```
 
-Operator alert recipe (Grafana / Prometheus):
-
-```yaml
-- alert: SecuredClaudeCheckLatencyP99High
-  expr: histogram_quantile(0.99, rate(secured_claude_check_duration_seconds_bucket[5m])) > 0.05
-  for: 5m
-  labels:
-    severity: warning
-  annotations:
-    summary: "secured-claude /check p99 > 50 ms (ADR-0002 SLO breach)"
-    runbook: |
-      1. Check JWT_VERIFY p99 — if also high, JWKS rotation lag.
-         Look at jwks_fetch_total{outcome=error}.
-      2. Check JWKS_FETCH p99 — if high, IdP-side latency.
-         Bypass to operator's IdP team.
-      3. If both are normal, suspect Cerbos PDP : check
-         check_decisions_total{decision=cerbos_unavailable}.
-      4. If everything else is normal, suspect audit DB :
-         /var/lib/secured-claude/approvals.db growing past 10 GB ?
-```
+(The original draft of this ADR included a Grafana alert recipe with multi-burn-rate semantics. Removed in the post-review scope-honesty pass — multi-burn-rate alerting is a SaaS gateway pattern, not a personal-proxy pattern. The data is there for anyone who wants it ; the doctrine is documented in the Google SRE workbook for those who need it.)
 
 ## References
 
-- [ADR-0002](0002-pretooluse-hook-as-interception-point.md) — 50 ms p99 hook latency budget
+- [ADR-0002](0002-pretooluse-hook-as-interception-point.md) — 50 ms p99 hook latency *target* (aspirational, not a contractual SLO)
 - [ADR-0042](0042-prometheus-metrics.md) — counter families this extends with histograms
 - [Prometheus histogram_quantile docs](https://prometheus.io/docs/prometheus/latest/querying/functions/#histogram_quantile)
-- [SLO doctrine (Google SRE workbook ch. 4)](https://sre.google/workbook/implementing-slos/) — multi-burn-rate alert pattern
 - v0.7+ tickets :
   - Per-issuer histogram labels (when operators need tenant-level latency breakdowns)
   - Native histograms (Prometheus 2.40+) — when prometheus-client adds emission support
