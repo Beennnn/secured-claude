@@ -14,9 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from secured_claude import __version__
+from secured_claude import __version__, metrics
 from secured_claude.cerbos_client import CerbosClient, CheckResult
 from secured_claude.oidc import MultiIssuerVerifier, OIDCVerifier, make_verifier
 from secured_claude.principals import (
@@ -168,6 +169,7 @@ def make_app(
                     effective_principal_id = sub
 
         if jwt_deny_reason is not None:
+            metrics.CHECK_DECISIONS_TOTAL.labels(decision="jwt_deny").inc()
             decision_id = audit_store.insert(
                 session_id=req.session_id,
                 principal_id=req.principal_id,
@@ -194,6 +196,7 @@ def make_app(
         roles = list(principal_entry.get("roles") or ["agent"])
         principal_attr = dict(principal_entry.get("attributes") or {})
 
+        cerbos_failed = False
         try:
             result: CheckResult = cerbos_client.check(
                 principal_id=effective_principal_id,
@@ -212,8 +215,13 @@ def make_app(
             allow = False
             reason = f"cerbos PDP unavailable: {type(e).__name__}: {e}"
             duration_ms = 0
+            cerbos_failed = True
 
         decision = "ALLOW" if allow else "DENY"
+        if cerbos_failed:
+            metrics.CHECK_DECISIONS_TOTAL.labels(decision="cerbos_unavailable").inc()
+        else:
+            metrics.CHECK_DECISIONS_TOTAL.labels(decision=decision).inc()
         decision_id = audit_store.insert(
             session_id=req.session_id,
             principal_id=effective_principal_id,
@@ -231,6 +239,13 @@ def make_app(
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {"status": "ok", "approvals_count": audit_store.count()}
+
+    @app.get("/metrics")
+    def prometheus_metrics() -> Response:
+        # ADR-0042 : Prometheus exposition format. Operators scrape this
+        # into their metrics backend ; the broker binds to 127.0.0.1 so
+        # the endpoint inherits the same trust boundary as /check.
+        return Response(content=metrics.render(), media_type=metrics.content_type())
 
     return app
 

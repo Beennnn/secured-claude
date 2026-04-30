@@ -30,6 +30,8 @@ from typing import Any
 import requests
 import yaml
 
+from secured_claude import metrics
+
 log = logging.getLogger(__name__)
 
 # Default principal — both `agent` and `claude_agent` per Cerbos's
@@ -168,6 +170,7 @@ class HTTPPrincipalProvider(PrincipalProvider):
     def load(self) -> dict[str, dict[str, Any]]:
         # Cache hit : within TTL, reuse the last successful response.
         if self._cache is not None and (self._now() - self._cache_ts) < self.cache_ttl_s:
+            metrics.PRINCIPALS_CACHE_HIT_TOTAL.inc()
             return self._cache
 
         headers: dict[str, str] = {}
@@ -184,6 +187,7 @@ class HTTPPrincipalProvider(PrincipalProvider):
             resp.raise_for_status()
         except requests.RequestException:
             log.exception("principals URL %s unreachable", self.url)
+            metrics.PRINCIPALS_FETCH_TOTAL.labels(outcome="error").inc()
             # Stale-on-error : prefer the last known-good cache over a
             # default-only fallback. Loud log so operators know.
             if self._cache is not None:
@@ -199,14 +203,19 @@ class HTTPPrincipalProvider(PrincipalProvider):
                         self.max_stale_age_s,
                     )
                     self._cache = None
+                    metrics.PRINCIPALS_STALE_DROPPED_TOTAL.inc()
+                    metrics.PRINCIPALS_FALLBACK_TOTAL.inc()
                     return _fallback()
                 log.warning(
                     "principals URL %s unreachable ; serving stale cache (age %.1fs)",
                     self.url,
                     age,
                 )
+                metrics.PRINCIPALS_STALE_SERVED_TOTAL.inc()
                 return self._cache
+            metrics.PRINCIPALS_FALLBACK_TOTAL.inc()
             return _fallback()
+        metrics.PRINCIPALS_FETCH_TOTAL.labels(outcome="success").inc()
 
         # Accept JSON or YAML — same parse path either way.
         body = resp.text

@@ -45,7 +45,15 @@ from typing import Any
 import jwt
 import requests
 from jwt import PyJWK
-from jwt.exceptions import PyJWTError
+from jwt.exceptions import (
+    ExpiredSignatureError,
+    InvalidAudienceError,
+    InvalidIssuerError,
+    InvalidSignatureError,
+    PyJWTError,
+)
+
+from secured_claude import metrics
 
 log = logging.getLogger(__name__)
 
@@ -177,16 +185,20 @@ class OIDCVerifier:
             data = resp.json()
         except (requests.RequestException, json.JSONDecodeError, ValueError):
             log.exception("OIDC JWKS fetch failed at %s", jwks_uri)
+            metrics.JWKS_FETCH_TOTAL.labels(outcome="error").inc()
             # Stale-on-error : serve cached JWKS IF not too old (ADR-0039).
             if self._too_stale(self._jwks_ts, "jwks"):
                 self._jwks = None
                 self._jwks_ts = 0.0
+                metrics.JWKS_STALE_DROPPED_TOTAL.inc()
             return self._jwks
         if not isinstance(data, dict) or not isinstance(data.get("keys"), list):
             if self._too_stale(self._jwks_ts, "jwks"):
                 self._jwks = None
                 self._jwks_ts = 0.0
+                metrics.JWKS_STALE_DROPPED_TOTAL.inc()
             return self._jwks
+        metrics.JWKS_FETCH_TOTAL.labels(outcome="success").inc()
         self._jwks = data
         self._jwks_ts = self._now()
         return self._jwks
@@ -220,10 +232,12 @@ class OIDCVerifier:
         IdP's JWKS via OIDC discovery.
         """
         if not token:
+            metrics.JWT_VERIFY_TOTAL.labels(outcome="rejected_other").inc()
             return None
         signing_key = self._resolve_signing_key(token)
         if signing_key is None:
             log.warning("OIDC : could not resolve signing key for token")
+            metrics.JWT_VERIFY_TOTAL.labels(outcome="rejected_signature").inc()
             return None
         options: dict[str, Any] = {}
         decode_kwargs: dict[str, Any] = {
@@ -238,9 +252,27 @@ class OIDCVerifier:
             options["verify_aud"] = False
         try:
             claims: dict[str, Any] = jwt.decode(token, **decode_kwargs)
+        except ExpiredSignatureError:
+            metrics.JWT_VERIFY_TOTAL.labels(outcome="rejected_exp").inc()
+            log.exception("OIDC : JWT expired")
+            return None
+        except InvalidIssuerError:
+            metrics.JWT_VERIFY_TOTAL.labels(outcome="rejected_iss").inc()
+            log.exception("OIDC : JWT iss mismatch")
+            return None
+        except InvalidAudienceError:
+            metrics.JWT_VERIFY_TOTAL.labels(outcome="rejected_aud").inc()
+            log.exception("OIDC : JWT aud mismatch")
+            return None
+        except InvalidSignatureError:
+            metrics.JWT_VERIFY_TOTAL.labels(outcome="rejected_signature").inc()
+            log.exception("OIDC : JWT signature invalid")
+            return None
         except PyJWTError:
+            metrics.JWT_VERIFY_TOTAL.labels(outcome="rejected_other").inc()
             log.exception("OIDC : JWT validation failed")
             return None
+        metrics.JWT_VERIFY_TOTAL.labels(outcome="accepted").inc()
         return claims
 
 
@@ -269,18 +301,22 @@ class MultiIssuerVerifier:
 
     def verify_token(self, token: str) -> dict[str, Any] | None:
         if not token:
+            metrics.MULTI_ISSUER_ROUTING_TOTAL.labels(outcome="rejected_no_iss").inc()
             return None
         try:
             unverified: dict[str, Any] = jwt.decode(
                 token, options={"verify_signature": False, "verify_aud": False}
             )
         except PyJWTError:
+            metrics.MULTI_ISSUER_ROUTING_TOTAL.labels(outcome="rejected_no_iss").inc()
             return None
         iss = str(unverified.get("iss") or "").rstrip("/")
         verifier = self._by_issuer.get(iss)
         if verifier is None:
             log.warning("OIDC : token iss=%r not in allowlist %s", iss, self.issuers)
+            metrics.MULTI_ISSUER_ROUTING_TOTAL.labels(outcome="rejected_iss_not_in_allowlist").inc()
             return None
+        metrics.MULTI_ISSUER_ROUTING_TOTAL.labels(outcome="routed").inc()
         return verifier.verify_token(token)
 
 
