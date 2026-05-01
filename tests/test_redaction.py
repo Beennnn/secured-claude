@@ -38,8 +38,12 @@ _TEST_SECRETS: list[tuple[str, str]] = [
     ),
     (
         "jwt",
-        "ey" + "J" + "hbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-        + "ey" + "J" + "zdWIiOiIxMjM0NTY3ODkwIn0."
+        "ey"
+        + "J"
+        + "hbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+        + "ey"
+        + "J"
+        + "zdWIiOiIxMjM0NTY3ODkwIn0."
         + "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
     ),
 ]
