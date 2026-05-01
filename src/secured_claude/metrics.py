@@ -121,6 +121,18 @@ CHECK_DECISIONS_TOTAL = Counter(
 
 
 # ────────────────────────────────────────────────────────────────────
+# Redaction counters (ADR-0046)
+# ────────────────────────────────────────────────────────────────────
+
+REDACTION_MATCHES_TOTAL = Counter(
+    "secured_claude_redaction_matches_total",
+    "Secrets redacted from tool output, by detection rule.",
+    labelnames=("rule",),  # aws-access-key | github-pat | jwt | …
+    registry=REGISTRY,
+)
+
+
+# ────────────────────────────────────────────────────────────────────
 # Histograms (ADR-0043) — latency distributions for diagnostics
 # ────────────────────────────────────────────────────────────────────
 #
@@ -221,6 +233,7 @@ __all__ = [
     "PRINCIPALS_FETCH_TOTAL",
     "PRINCIPALS_STALE_DROPPED_TOTAL",
     "PRINCIPALS_STALE_SERVED_TOTAL",
+    "REDACTION_MATCHES_TOTAL",
     "REGISTRY",
     "content_type",
     "render",

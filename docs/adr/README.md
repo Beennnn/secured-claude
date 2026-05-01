@@ -57,6 +57,7 @@ See [`0000-template.md`](0000-template.md) for the canonical template. Each ADR 
 | [0043](0043-prometheus-histograms.md) | Prometheus histograms for latency distributions | 4 histograms (check / jwt_verify / jwks_fetch / principals_fetch) with custom-tuned buckets ; operators build SLO alerts on p99 latency breaches ; per-stage attribution when `/check` is slow |
 | [0044](0044-per-issuer-config.md) | Per-issuer JSON config | `SECURED_CLAUDE_IDP_CONFIG` JSON list with per-tenant audience / bearer / mTLS / TTL overrides ; falls back to shared envs (v0.7.1 path) when unset ; multi-tenant SaaS with mixed-auth modes |
 | [0045](0045-non-features-rejected-for-scope.md) | Non-features explicitly rejected for scope | Formalises rejection of agent↔broker mTLS, background JWKS refresh, and OTLP push — none clear the (1)/(2)/(3) rule for a single-user dev tool ; codifies why future autonomous loops should skip them |
+| [0046](0046-on-the-fly-secret-redaction.md) | On-the-fly secret redaction in Read results | `RedactionEngine` with 15 curated gitleaks-style patterns + `/transform` route + PostToolUse hook ; closes the content-level exfil vector (`/workspace/.env` → LLM verbatim) that v0.7.x left open ; activated by `SECURED_CLAUDE_REDACT_LEVEL=secrets` |
 
 ### Operational envelope (where the code lives, how it's shipped)
 

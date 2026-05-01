@@ -66,6 +66,7 @@ dev = [
 [project.scripts]
 secured-claude = "secured_claude.cli:main"
 secured-claude-hook = "secured_claude.hook:main"
+secured-claude-posthook = "secured_claude.hook_post:main"
 
 [project.urls]
 Homepage = "https://gitlab.com/benoit.besson/secured-claude"

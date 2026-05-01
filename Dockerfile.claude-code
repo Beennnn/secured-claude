@@ -63,6 +63,9 @@ COPY --chmod=0755 docker/entrypoint.sh /entrypoint.sh
 # at the top of hook.py (#!/usr/bin/env python3) is mandatory — see
 # docs/dev/developer-environment.md §"Lessons from v0.1.1 runtime smoke".
 COPY --chmod=0755 src/secured_claude/hook.py /usr/local/bin/secured-claude-hook
+# ADR-0046 — PostToolUse redaction hook (no-op when SECURED_CLAUDE_REDACT_LEVEL
+# is unset/off ; opt-in by setting the env on `secured-claude up`).
+COPY --chmod=0755 src/secured_claude/hook_post.py /usr/local/bin/secured-claude-posthook
 
 # ── Runtime config ─────────────────────────────────────────────────────────
 USER agent

@@ -27,6 +27,8 @@ from secured_claude.principals import (
     YAMLPrincipalProvider,
     make_provider,
 )
+from secured_claude.redaction import RedactionEngine
+from secured_claude.redaction import make_engine as make_redaction_engine
 from secured_claude.store import Store
 
 log = logging.getLogger(__name__)
@@ -62,6 +64,18 @@ class CheckResponse(BaseModel):
     approve: bool
     reason: str
     decision_id: int
+
+
+# ADR-0046 : on-the-fly redaction.
+class TransformRequest(BaseModel):
+    action: str  # "redact" | "restore"
+    content: str
+    session_id: str = "unknown-session"
+
+
+class TransformResponse(BaseModel):
+    content: str
+    matches_fired: list[str] = Field(default_factory=list)
 
 
 def map_tool_to_resource(
@@ -134,6 +148,7 @@ def make_app(
     store: Store | None = None,
     principals: dict[str, dict[str, Any]] | None = None,
     verifier: OIDCVerifier | MultiIssuerVerifier | None = None,
+    redaction: RedactionEngine | None = None,
 ) -> FastAPI:
     """Build the FastAPI app. Test code injects mocks via `cerbos` and `store`."""
     cerbos_client = cerbos or CerbosClient(
@@ -145,6 +160,11 @@ def make_app(
     # `make_verifier()` returns None unless SECURED_CLAUDE_IDP_ISSUER
     # is set, so existing v0.6.0 deployments are unaffected.
     oidc_verifier = verifier if verifier is not None else make_verifier()
+    # ADR-0046 — `redaction=None` means PostToolUse redaction is disabled.
+    # `make_redaction_engine()` returns None unless
+    # SECURED_CLAUDE_REDACT_LEVEL is set, so existing v0.7.x deployments
+    # are unaffected.
+    redaction_engine = redaction if redaction is not None else make_redaction_engine()
 
     app = FastAPI(title="secured-claude broker", version=__version__)
 
@@ -157,6 +177,35 @@ def make_app(
 
     def _check(req: CheckRequest) -> CheckResponse:
         kind, rid, action, attr = map_tool_to_resource(req.tool, req.tool_input)
+
+        # ADR-0046 : if redaction is active AND the tool_input contains
+        # a placeholder we don't know about, refuse rather than passing
+        # the literal `<<SECRET:abc>>` to the executor.
+        if redaction_engine is not None:
+            import json as _json
+
+            input_serialised = _json.dumps(req.tool_input)
+            if redaction_engine.has_unresolved_placeholder(input_serialised, req.session_id):
+                decision_id = audit_store.insert(
+                    session_id=req.session_id,
+                    principal_id=req.principal_id,
+                    principal_roles=[],
+                    resource_kind=kind,
+                    resource_id=rid,
+                    action=action,
+                    decision="DENY",
+                    args=req.tool_input,
+                    cerbos_reason=(
+                        "redaction : tool_input references a placeholder "
+                        "not in this session's mapping (forged or expired)"
+                    ),
+                    duration_ms=0,
+                )
+                return CheckResponse(
+                    approve=False,
+                    reason="redaction placeholder not found in session map",
+                    decision_id=decision_id,
+                )
 
         # ADR-0038 : if a JWT is presented AND a verifier is configured,
         # the JWT is the source of truth for `principal_id`. A failed
@@ -241,6 +290,37 @@ def make_app(
             duration_ms=duration_ms,
         )
         return CheckResponse(approve=allow, reason=reason, decision_id=decision_id)
+
+    @app.post("/transform", response_model=TransformResponse)
+    def transform(req: TransformRequest) -> TransformResponse:
+        """ADR-0046 — secret redaction / restore for tool I/O.
+
+        action="redact" : caller (PostToolUse hook) sends raw tool
+        output, broker scans for secrets, returns redacted text + the
+        list of pattern rules that fired. Mapping is stored in-memory
+        keyed by session_id.
+
+        action="restore" : caller sends content potentially containing
+        placeholders, broker substitutes back. Used internally by the
+        broker's /check route when the LLM crafts a Bash / Write that
+        legitimately includes a placeholder argument.
+
+        When SECURED_CLAUDE_REDACT_LEVEL is unset, the engine is None
+        and the route is a no-op pass-through (returns input unchanged).
+        """
+        if redaction_engine is None:
+            return TransformResponse(content=req.content, matches_fired=[])
+        if req.action == "redact":
+            result = redaction_engine.redact(req.content, req.session_id)
+            return TransformResponse(content=result.content, matches_fired=result.matches)
+        if req.action == "restore":
+            return TransformResponse(
+                content=redaction_engine.restore(req.content, req.session_id),
+                matches_fired=[],
+            )
+        # Unknown action → pass-through (defensive ; future actions land
+        # here without breaking existing clients).
+        return TransformResponse(content=req.content, matches_fired=[])
 
     @app.get("/health")
     def health() -> dict[str, Any]:
