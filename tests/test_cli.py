@@ -79,7 +79,13 @@ def test_down_with_volumes_propagates() -> None:
 
 
 def test_status_no_services(capsys: pytest.CaptureFixture[str]) -> None:
-    with patch("secured_claude.cli.orchestrator.status", return_value=[]):
+    not_running = cli.orchestrator.ContainerStatus(
+        name="secured-claude-broker", state="not running", health=None, image="(host process)"
+    )
+    with (
+        patch("secured_claude.cli.orchestrator.status", return_value=[]),
+        patch("secured_claude.cli.orchestrator.broker_status", return_value=not_running),
+    ):
         rc = cli.main(["status"])
     assert rc == 0
     captured = capsys.readouterr()
@@ -92,7 +98,13 @@ def test_status_with_services(capsys: pytest.CaptureFixture[str]) -> None:
             name="cerbos", state="running", health="healthy", image="cerbos:0.42.0"
         )
     ]
-    with patch("secured_claude.cli.orchestrator.status", return_value=statuses):
+    not_running = cli.orchestrator.ContainerStatus(
+        name="secured-claude-broker", state="not running", health=None, image="(host process)"
+    )
+    with (
+        patch("secured_claude.cli.orchestrator.status", return_value=statuses),
+        patch("secured_claude.cli.orchestrator.broker_status", return_value=not_running),
+    ):
         rc = cli.main(["status"])
     assert rc == 0
     captured = capsys.readouterr()

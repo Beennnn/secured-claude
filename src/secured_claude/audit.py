@@ -8,12 +8,46 @@ since, and JSON export for SIEM-style downstream pipelines.
 from __future__ import annotations
 
 import json
+import re
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from rich.console import Console
 from rich.table import Table
 
 from secured_claude.store import Approval, Store
+
+_RELATIVE_SINCE_RE = re.compile(r"\A(\d+)([smhdw])\Z")
+_RELATIVE_DELTA = {
+    "s": "seconds",
+    "m": "minutes",
+    "h": "hours",
+    "d": "days",
+    "w": "weeks",
+}
+
+
+def parse_since(since: str) -> str:
+    """Convert a --since arg into an ISO 8601 lower bound on ts.
+
+    Accepts a compact relative duration (`30s`, `5m`, `2h`, `1d`, `1w`) or a
+    raw ISO 8601 timestamp. Relative values are anchored to UTC now.
+
+    Raises ValueError with a helpful message on unparseable input — better
+    than silently lexicographic-comparing nonsense against ts.
+    """
+    s = since.strip()
+    if m := _RELATIVE_SINCE_RE.fullmatch(s):
+        n, unit = int(m.group(1)), m.group(2)
+        delta = timedelta(**{_RELATIVE_DELTA[unit]: n})
+        return (datetime.now(UTC) - delta).isoformat(timespec="milliseconds")
+    if re.match(r"\A\d{4}-", s):
+        return s
+    raise ValueError(
+        f"--since: unrecognized format {s!r}. "
+        f"Use a relative duration (e.g. '5m', '2h', '1d', '1w') "
+        f"or an ISO 8601 timestamp (e.g. '2026-05-01T10:00:00Z')."
+    )
 
 
 def render_table(rows: list[Approval], console: Console | None = None) -> None:
@@ -86,9 +120,9 @@ def query(
         principal_id=principal_id,
         resource_kind=resource_kind,
         action=action,
-        since=since,
+        since=parse_since(since) if since is not None else None,
         limit=limit,
     )
 
 
-__all__ = ["query", "render_json", "render_table"]
+__all__ = ["parse_since", "query", "render_json", "render_table"]
