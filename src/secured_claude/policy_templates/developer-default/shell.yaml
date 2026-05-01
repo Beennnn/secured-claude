@@ -1,0 +1,119 @@
+---
+# Shell command policy — gates Bash tool calls.
+#
+# Posture (per ADR-0003 default-deny for shell):
+# - ALLOW only commands whose first word is in the allowlist AND whose
+#   full command does NOT match a known-dangerous pattern
+# - DENY by default (no matching ALLOW = DENY at the policy default)
+#
+# Resource attributes the broker provides:
+# - request.resource.attr.cmd_first_word — string, the first whitespace
+#   token of the command (e.g. "git" for "git status")
+# - request.resource.attr.full_cmd — full command string as-is
+# - request.resource.attr.cwd — working directory (typically /workspace)
+#
+# Threat model AT-3 (shell RCE), residual R-DNS-LEAK.
+
+apiVersion: api.cerbos.dev/v1
+
+resourcePolicy:
+  resource: command
+  version: default
+  importDerivedRoles:
+    - common_roles
+
+  rules:
+
+    # ──────────────────────────────────────────────────────────────────
+    # DENY : known-dangerous patterns (override anything below)
+    # ──────────────────────────────────────────────────────────────────
+    - actions: ["execute"]
+      effect: EFFECT_DENY
+      roles: ["claude_agent"]
+      condition:
+        match:
+          any:
+            of:
+              # Wide-blast destructive
+              - expr: request.resource.attr.full_cmd.matches("(?i).*\\brm\\s+(-[rRf]+\\s+)+/.*")
+              - expr: request.resource.attr.full_cmd.matches("(?i).*\\brm\\s+(-[rRf]+\\s+)+\\$HOME.*")
+              - expr: request.resource.attr.full_cmd.matches("(?i).*\\brm\\s+(-[rRf]+\\s+)+~.*")
+
+              # Pipe-to-shell idiom (curl|sh, wget|bash, etc.)
+              - expr: |
+                  request.resource.attr.full_cmd.matches("(?i).*(curl|wget|fetch)[^|]*\\|\\s*(sh|bash|zsh|fish|ksh|dash|python|perl|ruby|node).*")
+
+              # Privilege escalation
+              - expr: request.resource.attr.full_cmd.matches("(?i)\\s*sudo(\\s+|\\b).*")
+              - expr: request.resource.attr.full_cmd.matches("(?i)\\s*su(\\s+|\\b).*")
+              - expr: request.resource.attr.full_cmd.matches("(?i).*\\bdoas\\s+.*")
+
+              # Fork bomb shorthand
+              - expr: request.resource.attr.full_cmd.contains(":(){")
+              - expr: request.resource.attr.full_cmd.contains(":|:&")
+
+              # Wide chmod that opens up writability
+              - expr: request.resource.attr.full_cmd.matches("(?i).*chmod\\s+-?R?\\s*[0-7]*7[0-7]+.*")
+              - expr: request.resource.attr.full_cmd.matches("(?i).*chmod\\s+\\+[wsx].*")
+
+              # eval / exec with base64 (common obfuscation)
+              - expr: request.resource.attr.full_cmd.matches("(?i).*\\beval\\s*\\(?.*base64.*")
+              - expr: request.resource.attr.full_cmd.matches("(?i).*\\bbash\\s+-c\\s+\".*\\\\$\\(.*base64.*")
+
+              # Reverse shells common idioms
+              - expr: |
+                  request.resource.attr.full_cmd.matches("(?i).*(/dev/tcp/|/dev/udp/|nc\\s+-e|ncat\\s+-e|bash\\s+-i.*>&).*")
+
+              # dd-based wipes
+              - expr: request.resource.attr.full_cmd.matches("(?i).*dd\\s+if=/dev/(zero|random|urandom)\\s+of=.*")
+
+              # mkfs / fdisk / parted on real devices
+              - expr: request.resource.attr.full_cmd.matches("(?i).*(mkfs|fdisk|parted|mkswap|wipefs)\\b.*")
+
+              # Network-config tampering
+              - expr: request.resource.attr.full_cmd.matches("(?i).*(iptables|ip6tables|nftables|ufw|pf|firewall-cmd)\\s+.*-(F|D|X|R)\\b.*")
+
+              # Crypto miner indicator (xmrig, etc.) — best-effort signature
+              - expr: request.resource.attr.full_cmd.matches("(?i).*(xmrig|cgminer|cpuminer|t-rex|nbminer|minerd|stratum\\+tcp).*")
+
+              # Container / k8s privilege ops
+              - expr: request.resource.attr.full_cmd.matches("(?i).*docker\\s+(exec|run)\\s+.*--privileged.*")
+              - expr: request.resource.attr.full_cmd.matches("(?i).*kubectl\\s+.*--as=system:.*")
+
+    # ──────────────────────────────────────────────────────────────────
+    # ALLOW : commands whose first word is in the allowlist
+    # ──────────────────────────────────────────────────────────────────
+    - actions: ["execute"]
+      effect: EFFECT_ALLOW
+      roles: ["claude_agent"]
+      condition:
+        match:
+          expr: |
+            request.resource.attr.cmd_first_word in [
+              "ls", "cat", "head", "tail", "wc", "less", "more",
+              "grep", "egrep", "fgrep", "rg", "ag", "find", "fd", "tree",
+              "echo", "printf", "date", "pwd", "which", "type", "command",
+              "cd", "pushd", "popd",
+              "git",
+              "npm", "npx", "yarn", "pnpm",
+              "uv", "pip", "pipx", "python", "python3",
+              "node", "deno", "bun",
+              "mvn", "./mvnw", "gradle", "./gradlew",
+              "cargo", "rustc",
+              "go",
+              "make",
+              "docker", "docker-compose", "podman", "kubectl", "helm",
+              "terraform", "tofu", "ansible", "ansible-playbook",
+              "ruff", "black", "isort", "mypy", "pyright", "bandit",
+              "pytest", "tox", "nox",
+              "eslint", "prettier", "tsc",
+              "jq", "yq", "xq",
+              "curl", "wget", "http", "httpie",
+              "ssh", "scp", "rsync",
+              "tar", "gzip", "gunzip", "zip", "unzip", "xz",
+              "diff", "patch",
+              "sort", "uniq", "cut", "tr", "tee",
+              "openssl", "sha256sum", "md5sum", "sha1sum",
+              "true", "false", "test", "[", "[[",
+              "secured-claude", "secured-claude-hook"
+            ]

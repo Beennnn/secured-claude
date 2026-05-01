@@ -1,0 +1,47 @@
+# File access policy — enterprise-strict profile (read-only).
+#
+# Posture : ALLOW Read on /workspace/ ONLY. No Write, no Edit.
+# DENY everything else.
+#
+# Use case : compliance-bound deployments where the agent is for
+# inspection / audit / explanation only — it must not modify any
+# files. Pair with shell.yaml (no shell) and network.yaml (no
+# WebFetch) for full read-only operation.
+#
+# Migrate to developer-default by re-running `secured-claude policy
+# template developer-default --output policies/`.
+
+apiVersion: api.cerbos.dev/v1
+
+resourcePolicy:
+  resource: file
+  version: default
+  importDerivedRoles:
+    - common_roles
+  rules:
+    # Sensitive paths : deny FIRST so they take precedence over any
+    # ALLOW that follows.
+    - actions: ["read", "write", "edit"]
+      effect: EFFECT_DENY
+      derivedRoles:
+        - claude_agent
+      condition:
+        match:
+          expr: |
+            request.resource.attr.path.matches("(/\\.ssh/|/\\.aws/|/\\.gnupg/|password|secret|\\.env$|id_rsa|/etc/|/root/|/var/|/private/)")
+
+    # ALLOW Read inside /workspace/ only.
+    - actions: ["read"]
+      effect: EFFECT_ALLOW
+      derivedRoles:
+        - claude_agent
+      condition:
+        match:
+          expr: |
+            request.resource.attr.path.startsWith("/workspace/")
+
+    # Write + edit explicitly DENIED — enterprise-strict is read-only.
+    - actions: ["write", "edit"]
+      effect: EFFECT_DENY
+      derivedRoles:
+        - claude_agent

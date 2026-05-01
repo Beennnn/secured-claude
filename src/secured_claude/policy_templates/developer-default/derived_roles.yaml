@@ -1,0 +1,35 @@
+---
+# Derived roles for the secured-claude PDP.
+# A "derived role" is a role computed from the principal's attributes.
+# We keep them simple in v0.1 (single principal model) and extend in v0.2.
+#
+# See ADR-0001 for rationale.
+
+apiVersion: api.cerbos.dev/v1
+
+derivedRoles:
+  name: common_roles
+  definitions:
+    # Every Claude Code agent starts as `claude_agent`.
+    # Inherits the parent role from the principal's primary roles.
+    - name: claude_agent
+      parentRoles: ["agent"]
+
+    # An agent that has demonstrated trust over time may be elevated.
+    # v0.1 doesn't compute trust automatically — the broker simply sets
+    # `trust_level: 0` for every principal. v0.2+ may bump trust_level
+    # based on the audit log (e.g. "200+ approved actions, no denials").
+    - name: trusted_agent
+      parentRoles: ["claude_agent"]
+      condition:
+        match:
+          expr: request.principal.attr.trust_level >= 1
+
+    # An auditor role for read-only inspection of the audit log surface.
+    # Reserved for future v0.2 multi-principal mode ; not used in v0.1.
+    - name: auditor
+      parentRoles: ["agent"]
+      condition:
+        match:
+          expr: |
+            request.principal.attr.scope == "audit-only"

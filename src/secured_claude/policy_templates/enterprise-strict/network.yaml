@@ -1,0 +1,25 @@
+# Network policy — enterprise-strict profile (no WebFetch).
+#
+# Posture : NO WebFetch. Every URL request denied.
+#
+# Rationale : enterprise-strict assumes air-gapped or
+# regulator-bound deployments where outbound HTTP is forbidden by
+# default. The L2 egress proxy (ADR-0019) is the second line of
+# defense ; this policy is the first.
+#
+# Note : the broker itself still fetches the IdP for principals
+# + JWKS (ADR-0034 + ADR-0038) — those are HOST-side fetches
+# initiated by the broker, NOT by the agent's WebFetch tool.
+
+apiVersion: api.cerbos.dev/v1
+
+resourcePolicy:
+  resource: url
+  version: default
+  importDerivedRoles:
+    - common_roles
+  rules:
+    - actions: ["fetch"]
+      effect: EFFECT_DENY
+      derivedRoles:
+        - claude_agent
