@@ -116,11 +116,17 @@ def test_run_invokes_exec_in(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 
     def fake_exec(
-        compose_file: Path, service: str, command: list[str], *, interactive: bool
+        compose_file: Path,
+        service: str,
+        command: list[str],
+        *,
+        interactive: bool,
+        env: dict[str, str] | None = None,
     ) -> int:
         seen["service"] = service
         seen["command"] = command
         seen["interactive"] = interactive
+        seen["env"] = env
         return 0
 
     monkeypatch.setattr("secured_claude.cli.orchestrator.exec_in", fake_exec)
@@ -128,28 +134,63 @@ def test_run_invokes_exec_in(monkeypatch: pytest.MonkeyPatch) -> None:
     assert rc == 0
     assert seen["service"] == "claude-code"
     assert seen["interactive"] is True
+    assert seen["env"] is None  # no --principal → no env override
     cmd_list: list[str] = seen["command"]  # type: ignore[assignment]
     assert "claude" in cmd_list
     assert "hello" in cmd_list
+
+
+def test_run_with_principal_flag_threads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """v0.9.0 — `--principal X` adds `SECURED_CLAUDE_PRINCIPAL=X` to the env."""
+    seen: dict[str, object] = {}
+
+    def fake_exec(*args, **kwargs) -> int:
+        seen["env"] = kwargs.get("env")
+        return 0
+
+    monkeypatch.setattr("secured_claude.cli.orchestrator.exec_in", fake_exec)
+    rc = cli.main(["run", "--principal", "claude-code-trusted", "do", "stuff"])
+    assert rc == 0
+    assert seen["env"] == {"SECURED_CLAUDE_PRINCIPAL": "claude-code-trusted"}
 
 
 def test_exec_invokes_one_shot_exec(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 
     def fake_exec(
-        compose_file: Path, service: str, command: list[str], *, interactive: bool
+        compose_file: Path,
+        service: str,
+        command: list[str],
+        *,
+        interactive: bool,
+        env: dict[str, str] | None = None,
     ) -> int:
         seen["interactive"] = interactive
         seen["command"] = command
+        seen["env"] = env
         return 0
 
     monkeypatch.setattr("secured_claude.cli.orchestrator.exec_in", fake_exec)
     rc = cli.main(["exec", "summarize", "this"])
     assert rc == 0
     assert seen["interactive"] is False
+    assert seen["env"] is None
     cmd_list: list[str] = seen["command"]  # type: ignore[assignment]
     assert cmd_list[0] == "claude"
     assert cmd_list[1] == "-p"
+
+
+def test_exec_with_principal_flag_threads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_exec(*args, **kwargs) -> int:
+        seen["env"] = kwargs.get("env")
+        return 0
+
+    monkeypatch.setattr("secured_claude.cli.orchestrator.exec_in", fake_exec)
+    rc = cli.main(["exec", "--principal", "audit-only", "list", "approvals"])
+    assert rc == 0
+    assert seen["env"] == {"SECURED_CLAUDE_PRINCIPAL": "audit-only"}
 
 
 def test_audit_table_default(
@@ -484,4 +525,42 @@ def test_principal_validate_malformed_yaml_returns_2(tmp_path: Path) -> None:
     p = tmp_path / "bad.yaml"
     p.write_text("principals:\n  - invalid:: not\n  malformed: [\n", encoding="utf-8")
     rc = cli.main(["principal", "validate", "--path", str(p)])
+    assert rc == 2
+
+
+def test_principal_list_table_has_principals(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """v0.9.0 — `principal list` emits a Rich table with each principal_id."""
+    p = tmp_path / "p.yaml"
+    p.write_text(
+        "principals:\n"
+        "  alice:\n    roles: [agent, claude_agent]\n    attributes: {trust_level: 0}\n"
+        "  bob:\n    roles: [agent]\n    attributes: {scope: audit-only}\n",
+        encoding="utf-8",
+    )
+    rc = cli.main(["principal", "list", "--path", str(p)])
+    assert rc == 0
+    captured = capsys.readouterr()
+    flat = " ".join(captured.out.split())
+    assert "alice" in flat
+    assert "bob" in flat
+    assert "principals (2)" in flat
+    assert "trust_level=0" in flat
+    assert "audit-only" in flat
+
+
+def test_principal_list_missing_file_falls_back(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = cli.main(["principal", "list", "--path", str(tmp_path / "no.yaml")])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "single-default fallback" in captured.out
+
+
+def test_principal_list_malformed_yaml_returns_2(tmp_path: Path) -> None:
+    p = tmp_path / "bad.yaml"
+    p.write_text("principals:\n  - invalid:: not\n  malformed: [\n", encoding="utf-8")
+    rc = cli.main(["principal", "list", "--path", str(p)])
     assert rc == 2
