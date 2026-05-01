@@ -153,15 +153,19 @@ def cmd_exec(args: argparse.Namespace) -> int:
 
 def cmd_audit(args: argparse.Namespace) -> int:
     store = Store()
-    rows = audit.query(
-        store,
-        decision="ALLOW" if args.allowed else ("DENY" if args.denied else None),
-        principal_id=args.principal,
-        resource_kind=args.kind,
-        action=args.action,
-        since=args.since,
-        limit=args.limit,
-    )
+    try:
+        rows = audit.query(
+            store,
+            decision="ALLOW" if args.allowed else ("DENY" if args.denied else None),
+            principal_id=args.principal,
+            resource_kind=args.kind,
+            action=args.action,
+            since=args.since,
+            limit=args.limit,
+        )
+    except ValueError as e:
+        Console().print(f"[red]error:[/red] {e}")
+        return 2
     if args.json:
         print(audit.render_json(rows))
     else:
@@ -599,7 +603,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_audit.add_argument(
         "--action", help="filter by action (read|write|edit|execute|fetch|invoke|...)"
     )
-    p_audit.add_argument("--since", help="ISO 8601 lower bound on ts")
+    p_audit.add_argument(
+        "--since",
+        help=(
+            "lower bound on ts ; accepts a relative duration "
+            "('30s', '5m', '2h', '1d', '1w') or an ISO 8601 timestamp"
+        ),
+    )
     p_audit.add_argument("--limit", type=int, default=100, help="max rows (default 100)")
     p_audit.add_argument("--json", action="store_true", help="emit JSONL instead of a table")
     p_audit.set_defaults(func=cmd_audit)
