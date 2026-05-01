@@ -185,6 +185,13 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=512m
       - /run:rw,nosuid,nodev,size=64m
+      # Ephemeral HOME so Claude Code can persist `~/.claude.json` (a single
+      # file at HOME root, NOT inside `.claude/`). Without this, claude's
+      # config save fails EROFS on every startup → 30 s remote-settings
+      # timeout → silent exit with no output. See docs/dev/agent-container-debug.md.
+      # 8 MB is plenty for `.claude.json` (typically < 50 KB) ; the
+      # claude-state volume below overlays `.claude/` for persistent session.
+      - /home/agent:rw,nosuid,nodev,size=8m,uid=1001,gid=1001
       - /home/agent/.cache:rw,nosuid,nodev,size=512m
     cap_drop: [ALL]
     cap_add:
