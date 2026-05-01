@@ -118,7 +118,9 @@ def test_render_markdown_for_passing_run() -> None:
     """Markdown output contains the verdict and per-scenario rows."""
 
     # Use the same oracle logic as test_main_returns_0_when_all_pass to ensure
-    # all 26 scenarios match expectations.
+    # all current scenarios match expectations (count grows as new red-team
+    # categories land — e.g. MCP poisoning + prompt-injection-via-Read +
+    # supply-chain tool-rebind families added on top of the original 26).
     def oracle_check(**kwargs: Any) -> CheckResult:
         rid = str(kwargs.get("resource_id", ""))
         attr = kwargs.get("resource_attr", {})

@@ -1,0 +1,104 @@
+---
+# File access policy — gates Read / Write / Edit tool calls.
+#
+# Posture (per ADR-0003):
+# - ALLOW reads/writes/edits inside /workspace/
+# - DENY anything matching the sensitive-pattern list (.ssh, .aws, .gnupg,
+#   password, secret, .env, id_rsa, /etc/, /root/, /var/, …)
+# - DENY everything else (default DENY since no rule matches → policy default)
+#
+# DENY effects in Cerbos take precedence over ALLOW, so the deny-list also
+# applies to paths that would otherwise be inside /workspace/ (covers
+# /workspace/.env, /workspace/foo/.ssh/ etc. — defense in depth).
+#
+# See ADR-0001 (Cerbos PDP), ADR-0003 (default-deny), threat-model AT-1, AT-2, R-PROMPT-INJ-IN-DEV.
+
+apiVersion: api.cerbos.dev/v1
+
+resourcePolicy:
+  resource: file
+  version: default
+  importDerivedRoles:
+    - common_roles
+
+  rules:
+
+    # ──────────────────────────────────────────────────────────────────
+    # ALLOW : reads inside /workspace/ that don't match the deny patterns
+    # ──────────────────────────────────────────────────────────────────
+    - actions: ["read"]
+      effect: EFFECT_ALLOW
+      roles: ["claude_agent"]
+      condition:
+        match:
+          all:
+            of:
+              - expr: request.resource.attr.path.startsWith("/workspace/")
+              - expr: |
+                  !request.resource.attr.path.matches(".*\\.(ssh|aws|gnupg)/.*")
+              - expr: |
+                  !request.resource.attr.path.matches("(?i).*(password|secret|api[_-]?key|access[_-]?key|private[_-]?key|id_rsa|id_ed25519|id_ecdsa|/\\.env|\\.env\\.|credentials|token).*")
+              - expr: |
+                  !request.resource.attr.path.contains("/.git/hooks/")
+
+    # ──────────────────────────────────────────────────────────────────
+    # ALLOW : writes / edits inside /workspace/ (same constraints)
+    # ──────────────────────────────────────────────────────────────────
+    - actions: ["write", "edit"]
+      effect: EFFECT_ALLOW
+      roles: ["claude_agent"]
+      condition:
+        match:
+          all:
+            of:
+              - expr: request.resource.attr.path.startsWith("/workspace/")
+              - expr: |
+                  !request.resource.attr.path.matches(".*\\.(ssh|aws|gnupg)/.*")
+              - expr: |
+                  !request.resource.attr.path.matches("(?i).*(password|secret|api[_-]?key|access[_-]?key|private[_-]?key|id_rsa|id_ed25519|id_ecdsa|/\\.env|\\.env\\.|credentials|token).*")
+              - expr: |
+                  !request.resource.attr.path.contains("/.git/hooks/")
+              - expr: |
+                  !request.resource.attr.path.contains("/.git/config")
+
+    # ──────────────────────────────────────────────────────────────────
+    # DENY : sensitive paths (override any ALLOW above — DENY wins)
+    # Covers credential / key / config / secret material whose disclosure
+    # or modification would compromise the developer's broader environment.
+    # Threat model AT-1, AT-2.
+    # ──────────────────────────────────────────────────────────────────
+    - actions: ["read", "write", "edit"]
+      effect: EFFECT_DENY
+      roles: ["claude_agent"]
+      condition:
+        match:
+          any:
+            of:
+              # Credentials, keys, secret stores
+              - expr: request.resource.attr.path.matches(".*\\.ssh/.*")
+              - expr: request.resource.attr.path.matches(".*\\.aws/.*")
+              - expr: request.resource.attr.path.matches(".*\\.gnupg/.*")
+              - expr: |
+                  request.resource.attr.path.matches("(?i).*(id_rsa|id_ed25519|id_ecdsa|id_dsa).*")
+              - expr: |
+                  request.resource.attr.path.matches("(?i).*(password|secret|api[_-]?key|access[_-]?key|private[_-]?key|credentials|token)[^/]*$")
+              # .env files and variants
+              - expr: |
+                  request.resource.attr.path.matches("(?i).*/\\.env(\\.|$).*")
+              # System / root file regions
+              - expr: request.resource.attr.path.startsWith("/etc/")
+              - expr: request.resource.attr.path.startsWith("/root/")
+              - expr: request.resource.attr.path.startsWith("/var/")
+              - expr: request.resource.attr.path.startsWith("/proc/")
+              - expr: request.resource.attr.path.startsWith("/sys/")
+              # Git internals where post-commit hooks etc. could be persisted
+              - expr: request.resource.attr.path.contains("/.git/hooks/")
+              - expr: request.resource.attr.path.contains("/.git/config")
+              # Browser data / password manager DBs (Mac path examples)
+              - expr: |
+                  request.resource.attr.path.matches(".*Library/Application Support/Google/Chrome/.*")
+              - expr: |
+                  request.resource.attr.path.matches(".*\\.(kdbx|1pux|opvault).*")
+              # Path traversal attempts (we resolve before checking, but defense
+              # in depth on raw inputs that may slip past resolution)
+              - expr: request.resource.attr.path.contains("../")

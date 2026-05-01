@@ -1,0 +1,27 @@
+# MCP tool invocation policy — enterprise-strict profile (no MCP).
+#
+# Posture : NO MCP tool invocations. Every mcp__<server>__<tool>
+# call is denied.
+#
+# Rationale : enterprise-strict treats MCP as out-of-scope — the
+# attack surface (server impersonation, tool name confusion, payload
+# poisoning) is too wide for compliance-bound deployments. The L1
+# default-deny in the developer-default profile already requires
+# explicit allowlisting ; enterprise-strict makes the empty allowlist
+# permanent.
+#
+# Migrate to developer-default for per-server / per-tool allowlists
+# by re-running `secured-claude policy template developer-default --output policies/`.
+
+apiVersion: api.cerbos.dev/v1
+
+resourcePolicy:
+  resource: mcp_tool
+  version: default
+  importDerivedRoles:
+    - common_roles
+  rules:
+    - actions: ["invoke"]
+      effect: EFFECT_DENY
+      derivedRoles:
+        - claude_agent

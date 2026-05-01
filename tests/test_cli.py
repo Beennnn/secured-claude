@@ -231,6 +231,80 @@ def test_policy_stats_renders_table(
 
 
 # ────────────────────────────────────────────────────────────────────
+# `policy template` — TASKS.md item #2
+# ────────────────────────────────────────────────────────────────────
+
+
+def test_policy_template_developer_default_writes_5_yamls(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "policies"
+    rc = cli.main(["policy", "template", "developer-default", "--output", str(out)])
+    assert rc == 0
+    yamls = sorted(p.name for p in out.glob("*.yaml"))
+    assert yamls == [
+        "derived_roles.yaml",
+        "filesystem.yaml",
+        "mcp.yaml",
+        "network.yaml",
+        "shell.yaml",
+    ]
+    captured = capsys.readouterr()
+    assert "wrote 5 policy files" in captured.out
+
+
+def test_policy_template_enterprise_strict_writes_5_yamls_with_strict_posture(
+    tmp_path: Path,
+) -> None:
+    """Enterprise-strict template ships filesystem/shell/network/mcp DENY policies."""
+    out = tmp_path / "policies"
+    rc = cli.main(["policy", "template", "enterprise-strict", "--output", str(out)])
+    assert rc == 0
+    # filesystem should explicitly deny write/edit
+    fs = (out / "filesystem.yaml").read_text()
+    assert 'actions: ["write", "edit"]' in fs
+    assert "EFFECT_DENY" in fs
+    # shell should deny execute
+    shell = (out / "shell.yaml").read_text()
+    assert 'actions: ["execute"]' in shell
+    assert "EFFECT_DENY" in shell
+
+
+def test_policy_template_skips_existing_files_without_force(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "policies"
+    out.mkdir()
+    (out / "filesystem.yaml").write_text("# user-customised, do not overwrite\n")
+    rc = cli.main(["policy", "template", "developer-default", "--output", str(out)])
+    assert rc == 0
+    # Existing file untouched
+    assert (out / "filesystem.yaml").read_text() == "# user-customised, do not overwrite\n"
+    # 4 others written, 1 skipped
+    captured = capsys.readouterr()
+    assert "skipped 1" in captured.out
+    assert "wrote 4" in captured.out
+
+
+def test_policy_template_force_overwrites_existing(tmp_path: Path) -> None:
+    out = tmp_path / "policies"
+    out.mkdir()
+    (out / "filesystem.yaml").write_text("# stale\n")
+    rc = cli.main(["policy", "template", "developer-default", "--output", str(out), "--force"])
+    assert rc == 0
+    assert (out / "filesystem.yaml").read_text() != "# stale\n"
+    assert "EFFECT_ALLOW" in (out / "filesystem.yaml").read_text()
+
+
+def test_policy_template_creates_output_dir_if_missing(tmp_path: Path) -> None:
+    out = tmp_path / "deep" / "nested" / "policies"
+    rc = cli.main(["policy", "template", "developer-default", "--output", str(out)])
+    assert rc == 0
+    assert out.is_dir()
+    assert len(list(out.glob("*.yaml"))) == 5
+
+
+# ────────────────────────────────────────────────────────────────────
 # ADR-0029 — external audit log hash anchor
 # ────────────────────────────────────────────────────────────────────
 

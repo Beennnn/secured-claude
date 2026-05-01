@@ -1,0 +1,28 @@
+# Shell command policy — enterprise-strict profile (no shell).
+#
+# Posture : NO Bash tool calls. The empty allowlist means every
+# command request hits the policy default (DENY).
+#
+# Rationale : enterprise-strict is for read-only inspection ; even
+# "safe" commands like `ls` are denied because they expand the
+# attack surface (path traversal in argv, output piping into curl,
+# environment variable leaks).
+#
+# Migrate to developer-default for the standard dev allowlist
+# (git, npm, uv, python, node, etc.) by re-running
+# `secured-claude policy template developer-default --output policies/`.
+
+apiVersion: api.cerbos.dev/v1
+
+resourcePolicy:
+  resource: command
+  version: default
+  importDerivedRoles:
+    - common_roles
+  rules:
+    # Explicit DENY for the entire `execute` action — defense-in-depth
+    # in case a future policy override accidentally adds an ALLOW.
+    - actions: ["execute"]
+      effect: EFFECT_DENY
+      derivedRoles:
+        - claude_agent

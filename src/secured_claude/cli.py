@@ -471,6 +471,68 @@ def cmd_principal_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_policy_template(args: argparse.Namespace) -> int:
+    """Scaffold a starter policies/ tree from a profile template.
+
+    Profiles available :
+      * developer-default — workspace RW + standard dev shell allowlist
+        + curated network/MCP allowlists. Mirrors the project's baseline
+        policies/ ; useful for new repos getting started with secured-claude.
+      * enterprise-strict — read-only filesystem, no shell, no WebFetch,
+        no MCP. Compliance-bound posture for inspection-only deployments.
+
+    Refuses to overwrite existing files unless --force is passed. Reports
+    each file written + a final hint to run `secured-claude policy lint`
+    to validate the result.
+    """
+    import shutil
+    from importlib import resources
+
+    console = Console()
+    profile = args.profile
+    output_dir = Path(args.output)
+
+    template_files = resources.files("secured_claude.policy_templates").joinpath(profile)
+    if not template_files.is_dir():
+        console.print(f"[red]error:[/red] template directory missing for profile {profile!r}")
+        return 1
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written: list[str] = []
+    skipped: list[str] = []
+    for entry in template_files.iterdir():
+        if not entry.name.endswith(".yaml"):
+            continue
+        target = output_dir / entry.name
+        if target.exists() and not args.force:
+            skipped.append(entry.name)
+            continue
+        with resources.as_file(entry) as src_path:
+            shutil.copyfile(src_path, target)
+        written.append(entry.name)
+
+    if written:
+        console.print(f"[green]wrote[/green] {len(written)} policy files to {output_dir}/")
+        for name in written:
+            console.print(f"  · {name}")
+    if skipped:
+        console.print(
+            f"[yellow]skipped[/yellow] {len(skipped)} (already exist, use --force to overwrite):"
+        )
+        for name in skipped:
+            console.print(f"  · {name}")
+    if not written and not skipped:
+        console.print(f"[yellow]no .yaml files found in template {profile!r}[/yellow]")
+        return 1
+
+    if written:
+        console.print(
+            f"\nNext : [bold]secured-claude policy lint[/bold] "
+            f"to validate, then commit {output_dir}/ to your repo."
+        )
+    return 0
+
+
 def cmd_policy_stats(args: argparse.Namespace) -> int:
     """Show the most-frequently approved (resource_kind, action) tuples."""
     store = Store()
@@ -581,6 +643,29 @@ def build_parser() -> argparse.ArgumentParser:
     psub.add_parser("stats", help="top-N approved (resource_kind, action) tuples").set_defaults(
         func=cmd_policy_stats
     )
+    p_policy_template = psub.add_parser(
+        "template",
+        help=(
+            "scaffold a starter policies/ tree from a profile "
+            "(developer-default | enterprise-strict)"
+        ),
+    )
+    p_policy_template.add_argument(
+        "profile",
+        choices=["developer-default", "enterprise-strict"],
+        help="policy profile to scaffold",
+    )
+    p_policy_template.add_argument(
+        "--output",
+        default="policies",
+        help="target directory (default : ./policies)",
+    )
+    p_policy_template.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite existing files (default : skip files that already exist)",
+    )
+    p_policy_template.set_defaults(func=cmd_policy_template)
 
     p_principal = sub.add_parser(
         "principal",
