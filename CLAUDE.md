@@ -41,6 +41,32 @@ uv run secured-claude audit
 uv run secured-claude down
 ```
 
+## Scope discipline — lesson from the v0.7.x autonomy-loop drift
+
+**Background** (2026-04-30 / 2026-05-01) : An autonomous-loop session shipped 8 versions in one run (v0.6.0 → v0.7.4), with each new ADR adopting more "enterprise-grade" framing than the previous : "multi-tenant SaaS", "M&A migration windows", "PKI-backed enclaves", "SLO multi-burn-rate alerts", "hybrid cloud DR failover". The user pushback : *this is just a personal proxy, why all the SaaS framing ?*
+
+The lesson, in one sentence : **autonomous waves drift toward enterprise framing because every new ADR builds on the previous one's vocabulary, not on a concrete user-asked use case.**
+
+### Hard rule for this repo
+
+Before adding ANY new feature in an autonomous loop, answer in the commit message + the ADR :
+
+1. **Who specifically asked for this ?** A real user with a name, OR a documented threat the project commits to defending. NOT "operators in industry vertical X might want it" — that's speculative framing that compounds.
+2. **What's the value for the project's actual use case ?** The actual use case is : ONE developer on their laptop, loopback broker, ~tens of `/check` per minute, no operator team, no Grafana, no on-call. If the answer to (2) is "near-zero for the actual use case", the work is YAGNI ; defer it as a 🤔 to-consider in TASKS.md instead of shipping.
+3. **What's the cost in code + maintenance + cognitive load ?** Even small features (~30 lines) accumulate framing in ADRs that future sessions read and feel pressure to extend.
+
+If (1) is empty AND (2) is "near-zero", **don't ship it**. Document it in TASKS.md as a 🤔 to-consider with the realistic value/cost note ; let a real user request (or a 6-month review) bring it back.
+
+### Audit-trail of speculative work
+
+ADRs 0040, 0041, 0043, 0044 each carry a "Scope honesty" section at the top (added 2026-04-30) admitting the original framing was speculative. The code stays as-shipped (none of it is faulty, just over-spec'd). When in doubt about whether a future feature fits, re-read those addenda — they're the canonical example of how autonomous waves drift.
+
+### What this means in practice for an autonomous loop
+
+- **Every wakeup that lands a new feature must cite the (1) / (2) / (3) answers.** If the autonomous prompt can't fill (1), the loop should pause and post the candidate to TASKS.md as 🤔 instead.
+- **Per-stage observability counters / histograms**, **per-issuer config**, **multi-issuer ALLOWLIST**, **mTLS** — all four shipped in v0.7.x without a concrete user ask. Future similar items (background JWKS refresh, OTLP push, JWT-via-cookie, etc.) need an explicit user request before code lands.
+- **The autonomous loop's success metric is not "versions shipped per session"**, it's "versions shipped that match a concrete user need". Use TASKS.md as the mediation layer ; the loop drains TASKS.md, doesn't generate new entries autonomously.
+
 ## Hard rules for this repo
 
 - **No bare `latest` tags** — every Docker image pinned by digest. CLAUDE.md global "pin everything" rule applies in full.
