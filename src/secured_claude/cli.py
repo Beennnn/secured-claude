@@ -100,7 +100,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         console.print(f"[red]error:[/red] {e}")
         return 1
 
-    if not statuses:
+    # Show the host-side broker alongside container services so the user
+    # gets a single coherent picture (TASKS.md item shipped post-v0.8.0).
+    broker = orchestrator.broker_status()
+
+    if not statuses and "not running" in broker.state:
         console.print("[yellow]No services running.[/yellow] Use `secured-claude up` to start.")
         return 0
 
@@ -109,9 +113,11 @@ def cmd_status(args: argparse.Namespace) -> int:
     table.add_column("state")
     table.add_column("health")
     table.add_column("image")
-    for s in statuses:
+    for s in [*statuses, broker]:
         state_styled = (
-            f"[green]{s.state}[/green]" if s.state == "running" else f"[yellow]{s.state}[/yellow]"
+            f"[green]{s.state}[/green]"
+            if s.state == "running" or "running" in s.state
+            else f"[yellow]{s.state}[/yellow]"
         )
         table.add_row(s.name, state_styled, s.health or "-", s.image)
     console.print(table)
