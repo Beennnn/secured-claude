@@ -1,0 +1,20 @@
+# Gitleaks config for secured-claude.
+#
+# Excludes test fixtures that intentionally contain example secret
+# strings. These are AWS / GitHub / Slack / Stripe / Anthropic example
+# secrets used to verify the redaction patterns in src/secured_claude/
+# redaction.py — the whole point of the test is to detect them, so
+# they need to LITERALLY APPEAR in the test source.
+
+[extend]
+# Inherit gitleaks's default rule set ; only add ALLOWLIST entries below.
+useDefault = true
+
+[allowlist]
+description = "test fixtures + pytest cache"
+paths = [
+    "tests/test_redaction\\.py",
+    "\\.pytest_cache/",
+    "tests/__pycache__/",
+    "__pycache__/",
+]
