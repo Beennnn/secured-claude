@@ -1,18 +1,12 @@
 # TASKS
 
-Pending work for the next session. Stripped to items still open or worth considering after the v0.7.4 + scope-honesty pass.
-
-## 🤔 To consider (decide before starting)
-
-The v0.7.x trajectory shipped 8 versions of progressively-more-enterprise framing for what is fundamentally a personal dev tool. The user pushback on 2026-04-30 led to a "scope honesty" addendum on ADR-0040 / 0041 / 0043 / 0044. Before picking up any of these, decide whether they fit the project's actual use case (single-user laptop, loopback broker, ~tens of /check per minute) :
-
-- 🤔 **v0.8 — agent ↔ broker mTLS** — replace JWT-in-payload with cert-based auth on the broker connection itself. ~150-200 lines + tests + ADR. **Real value for personal proxy** : closes "another local process spoofs the agent identity" gap. **Cost** : startup cert config, uvicorn TLS, hook cert-presentation, docker-compose volumes.
-- 🤔 **v0.7.5 — background JWKS refresh thread** — proactive re-fetch before TTL expiry. **Real value for personal proxy** : near-zero (single-user latency tail is 1 fetch every hour, not cumulative). **Cost** : threading lifecycle in FastAPI lifespan. Likely YAGNI ; could /schedule a 6-month follow-up if histograms ever show latency tail issues.
-- 🤔 **OTLP push exporter** — vendor-neutral metrics push (Datadog / Honeycomb / Grafana Cloud OTel). **Real value for personal proxy** : zero. Out of scope unless someone asks.
+Pending work for the next session. Per CLAUDE.md TASKS convention :
+short, scannable, every line is something the next session must act on.
 
 ## ☐ Open work
 
-(none — the 4 items originally listed here on 2026-04-30 were drained on 2026-05-01 across commits c157ca4, 31ffc37, 40a6b25, 1840596 : README honesty pass, CLAUDE.md scope-discipline section, 9 new red-team scenarios, `policy template` subcommand.)
+- ☐ **Auto-start the host-side broker on `secured-claude up`** — discovered during the v0.8.0 smoke (2026-05-01). `secured-claude up` only starts containers (cerbos / agent / dns / egress) ; the FastAPI broker on 127.0.0.1:8765 has to be started manually via `uvicorn secured_claude.gateway:make_app --factory --host 127.0.0.1 --port 8765`. The hook in the agent container POSTs to `host.docker.internal:8765` ; without the broker running, every tool call fails with "broker unavailable" → DENY (per ADR-0009 fail-closed). Fix : extend `orchestrator.up()` to fork-launch the broker as a background process + write its PID to `~/.local/share/secured-claude/broker.pid`. `down` stops it. `status` reports it. → closes the DX gap so a fresh user gets a working setup with one command.
+- ☐ **`claude -p` hangs inside the agent container** — discovered during the v0.8.0 smoke (2026-05-01). `claude -p "say hello"` produces no output and no `/check` hook fires, even with `CLAUDE_CODE_OAUTH_TOKEN` set. Investigation showed the L2/L3 confinement is NOT the cause : `*.anthropic.com` is already in the tinyproxy + dnsmasq allowlist, `console.anthropic.com` resolves + returns 302 reachably from inside the container. Likely real causes : (a) OAuth token re-use rejection — the same token the host's Claude Code session uses can't be re-used for a concurrent session inside the agent container ; (b) `claude --print` non-interactive mode in containerized contexts has a known startup issue ; (c) claude waits for an interactive prompt that never arrives via `docker exec`. Fix : (1) reproduce with a fresh OAuth token reserved for the agent only, (2) trace claude's startup with `CLAUDE_DEBUG=1` or strace, (3) document in `docs/dev/agent-container-debug.md`. Until then, the broker-side stack is fully validated end-to-end (291 tests + curl-driven smoke), but interactive sessions through Claude Code itself are blocked on this separate auth issue.
 
 ## 🚫 Blocked
 
@@ -20,4 +14,8 @@ The v0.7.x trajectory shipped 8 versions of progressively-more-enterprise framin
 
 ---
 
-When all items here are done or explicitly cancelled, delete this file + commit the deletion (per CLAUDE.md convention). Don't keep an empty or "nothing pending" stub.
+Decisions live in ADRs, not here :
+- **3 v0.7.x speculative items** (agent↔broker mTLS, background JWKS refresh, OTLP push) → **rejected**, see [ADR-0045](docs/adr/0045-non-features-rejected-for-scope.md).
+- **On-the-fly secret redaction** → **shipped** in v0.8.0, see [ADR-0046](docs/adr/0046-on-the-fly-secret-redaction.md).
+
+When all ☐ items here are done, delete this file + commit the deletion (per CLAUDE.md convention).
