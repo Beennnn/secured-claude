@@ -50,10 +50,15 @@ services:
     networks:
       secured-claude-net:
         ipv4_address: 172.30.42.6
-    ports:
-      # Bound to localhost only — matches the host-side broker's posture
-      # where 8765 is reachable only from the docker bridge.
-      - "127.0.0.1:8765:8765"
+    # NOTE : intentionally NO host port mapping. The agent talks to the
+    # broker via the Docker bridge (`SECURED_CLAUDE_BROKER` env below
+    # points to the broker's static IP on the /29 subnet), and
+    # bin/test-full-stack.sh exercises /health + /check via
+    # `docker compose exec broker wget ... http://127.0.0.1:8765/...`
+    # — the broker's own loopback inside its container. Publishing the
+    # broker on the host would collide with the v0.8.1 host-side broker
+    # on macbook-local runners (where local + CI share the host's port
+    # space). See TASKS.md for the v0.8.1 conflict the omission resolves.
     environment:
       # Cerbos URL — the broker calls Cerbos at the cerbos service IP.
       # /29 subnet : 172.30.42.2 = cerbos (per docker-compose.yml).
