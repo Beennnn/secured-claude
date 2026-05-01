@@ -127,6 +127,16 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _principal_env(args: argparse.Namespace) -> dict[str, str] | None:
+    """Build the env override dict for a `run`/`exec` session.
+
+    Returns ``{"SECURED_CLAUDE_PRINCIPAL": <id>}`` when --principal is set,
+    else ``None`` (so the agent container's baked default applies).
+    """
+    principal = getattr(args, "principal", None)
+    return {"SECURED_CLAUDE_PRINCIPAL": principal} if principal else None
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Attach an interactive Claude Code session inside the running container."""
     cmd = ["claude"]
@@ -137,6 +147,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         service="claude-code",
         command=cmd,
         interactive=True,
+        env=_principal_env(args),
     )
 
 
@@ -148,6 +159,7 @@ def cmd_exec(args: argparse.Namespace) -> int:
         service="claude-code",
         command=cmd,
         interactive=False,
+        env=_principal_env(args),
     )
 
 
@@ -481,6 +493,58 @@ def cmd_principal_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_principal_list(args: argparse.Namespace) -> int:
+    """List principals defined in config/principals.yaml (ADR-0047).
+
+    Lighter than `principal validate` — emits a Rich table without the
+    schema-check chatter, so operators can pick a `--principal` for
+    `run` / `exec` at a glance.
+
+    Exit codes :
+      0 — file readable + at least one principal defined (or empty file
+          with the implicit single-default fallback noted)
+      2 — file unreadable / not YAML
+    """
+    import os
+
+    import yaml
+
+    console = Console()
+    path_arg = args.path or os.environ.get("SECURED_CLAUDE_PRINCIPALS")
+    path = Path(path_arg) if path_arg else Path("config/principals.yaml")
+    if not path.exists():
+        console.print(
+            f"[yellow]principals file {path} not found — "
+            "broker uses single-default fallback (`claude-code-default`)[/yellow]"
+        )
+        return 0
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as e:
+        console.print(f"[red]✗ {path} is malformed YAML: {e}[/red]")
+        return 2
+    raw = (data or {}).get("principals") if isinstance(data, dict) else None
+    if not isinstance(raw, dict):
+        console.print(f"[yellow]{path} has no `principals:` mapping[/yellow]")
+        return 0
+    table = Table(title=f"principals ({len(raw)}) — from {path}", header_style="bold magenta")
+    table.add_column("principal_id")
+    table.add_column("roles")
+    table.add_column("attributes")
+    for pid, entry in raw.items():
+        if not isinstance(entry, dict):
+            continue
+        roles = "+".join(entry.get("roles") or [])
+        attrs = ", ".join(f"{k}={v}" for k, v in (entry.get("attributes") or {}).items())
+        table.add_row(pid, roles, attrs)
+    console.print(table)
+    console.print(
+        "\n[dim]Use one with `secured-claude run --principal <principal_id>` "
+        "(or `exec --principal ...`).[/dim]"
+    )
+    return 0
+
+
 def cmd_policy_template(args: argparse.Namespace) -> int:
     """Scaffold a starter policies/ tree from a profile template.
 
@@ -589,10 +653,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run", help="interactive Claude Code session")
     p_run.add_argument("prompt", nargs="*", help="initial prompt (optional)")
+    p_run.add_argument(
+        "--principal",
+        help=(
+            "principal_id for this session (overrides the container default). "
+            "Must exist in config/principals.yaml ; see "
+            "`secured-claude principal list`."
+        ),
+    )
     p_run.set_defaults(func=cmd_run)
 
     p_exec = sub.add_parser("exec", help="one-shot Claude Code session")
     p_exec.add_argument("prompt", nargs="*", help="prompt to send")
+    p_exec.add_argument(
+        "--principal",
+        help=(
+            "principal_id for this session (overrides the container default). "
+            "Must exist in config/principals.yaml ; see "
+            "`secured-claude principal list`."
+        ),
+    )
     p_exec.set_defaults(func=cmd_exec)
 
     p_audit = sub.add_parser("audit", help="query the SQLite audit log")
@@ -701,6 +781,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_principal_validate.set_defaults(func=cmd_principal_validate)
+
+    p_principal_list = pripsub.add_parser(
+        "list",
+        help="list principals from config/principals.yaml (use one with `run --principal <id>`)",
+    )
+    p_principal_list.add_argument(
+        "--path",
+        default=None,
+        help=(
+            "path to principals.yaml "
+            "(default : SECURED_CLAUDE_PRINCIPALS env or config/principals.yaml)"
+        ),
+    )
+    p_principal_list.set_defaults(func=cmd_principal_list)
 
     return parser
 

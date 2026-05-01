@@ -22,6 +22,26 @@ GitLab tag pages : `https://gitlab.com/benoit.besson/secured-claude/-/tags/<tag>
 
 ---
 
+## [v0.9.0] — 2026-05-01
+
+Multi-principal session activation (ADR-0047) — closes the agent-side gap left by v0.3.1.
+
+- `feat(cli)` — `secured-claude run --principal <id>` and `exec --principal <id>` thread the env override through `docker compose exec -e SECURED_CLAUDE_PRINCIPAL=<id>`. The principal directory's `trusted_agent` and `auditor` derived roles (defined since v0.1, dormant since v0.3.1's directory landing) are now ACTUALLY usable end-to-end without container restart.
+- `feat(cli)` — `secured-claude principal list` emits a Rich table of available principal_ids.
+- `feat(orchestrator)` — `exec_in()` accepts `env={...}` for per-exec env overrides.
+- 8 new tests (5 CLI + 3 orchestrator). 321 total, 91.27 % coverage.
+
+[GitLab tag](https://gitlab.com/benoit.besson/secured-claude/-/tags/v0.9.0)
+
+## [v0.8.4] — 2026-05-01
+
+Documentation gaps closed (CHANGELOG + CONTRIBUTING + dev index + README refresh).
+
+- `docs` — added `CHANGELOG.md` (this file), `CONTRIBUTING.md` (quick-start + commit conventions + ADR proposal flow), `docs/dev/README.md` (developer-docs index linking the agent-container debug recipe).
+- README counts refreshed (313 tests / 91.27 % cov / 47 ADRs / status v0.9.0) + new Documentation map section.
+
+[GitLab tag](https://gitlab.com/benoit.besson/secured-claude/-/tags/v0.8.4)
+
 ## [v0.8.3] — 2026-05-01
 
 3 ergonomic/quality fixes batched ; **TASKS.md cleared (zero open ☐)**.

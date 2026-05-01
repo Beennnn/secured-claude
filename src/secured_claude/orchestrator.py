@@ -316,15 +316,25 @@ def exec_in(
     command: list[str],
     *,
     interactive: bool = True,
+    env: dict[str, str] | None = None,
 ) -> int:
     """Run a command inside a running container, optionally with TTY for interactive use.
 
-    Returns the exit code from the inner command (so `secured-claude run` can
-    forward it back to the caller).
+    `env` lets callers override env vars FOR THIS EXEC ONLY (passed via
+    `docker compose exec -e KEY=VAL ...`). Useful for per-session
+    overrides like `SECURED_CLAUDE_PRINCIPAL=<id>` (v0.9.0
+    multi-principal activation) where the container's baked-in default
+    must yield to the caller's choice without a container restart.
+
+    Returns the exit code from the inner command (so `secured-claude run`
+    can forward it back to the caller).
     """
     args = ["exec"]
     if interactive:
         args.extend(["-i", "-t"])
+    if env:
+        for key, value in env.items():
+            args.extend(["-e", f"{key}={value}"])
     args.append(service)
     args.extend(command)
     proc = subprocess.run(  # noqa: S603 — argv list, shell=False

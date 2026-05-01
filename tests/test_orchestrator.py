@@ -208,6 +208,53 @@ def test_exec_in_non_interactive_omits_tty_flags(compose_file: Path) -> None:
     assert "-t" not in args
 
 
+def test_exec_in_threads_env_overrides_via_dash_e(compose_file: Path) -> None:
+    """v0.9.0 — `env={...}` becomes `-e KEY=VAL` argv pairs so the inner
+    process sees the override without a container restart."""
+    fake_proc = MagicMock(returncode=0)
+    with patch.object(orchestrator.subprocess, "run", return_value=fake_proc) as run:
+        orchestrator.exec_in(
+            compose_file,
+            service="claude-code",
+            command=["claude"],
+            interactive=False,
+            env={"SECURED_CLAUDE_PRINCIPAL": "claude-code-trusted"},
+        )
+    args = run.call_args.args[0]
+    # The pair `-e SECURED_CLAUDE_PRINCIPAL=claude-code-trusted` must appear
+    # adjacently in argv. We don't assert exact index because `compose -f
+    # <file>` precedes ; we assert the pair.
+    found_idx = None
+    for i, a in enumerate(args):
+        if a == "-e" and i + 1 < len(args) and args[i + 1].startswith("SECURED_CLAUDE_PRINCIPAL="):
+            found_idx = i
+            break
+    assert found_idx is not None
+    assert args[found_idx + 1] == "SECURED_CLAUDE_PRINCIPAL=claude-code-trusted"
+    # And the env pair must be BEFORE the service name (docker compose exec
+    # order : `exec [flags] <service> <command>`).
+    assert found_idx < args.index("claude-code")
+
+
+def test_exec_in_no_env_means_no_dash_e_flags(compose_file: Path) -> None:
+    """When env is None or empty, no `-e` argv elements are added."""
+    fake_proc = MagicMock(returncode=0)
+    with patch.object(orchestrator.subprocess, "run", return_value=fake_proc) as run:
+        orchestrator.exec_in(
+            compose_file, service="x", command=["echo"], interactive=False, env=None
+        )
+    args = run.call_args.args[0]
+    assert "-e" not in args
+
+
+def test_exec_in_empty_env_dict_means_no_dash_e_flags(compose_file: Path) -> None:
+    fake_proc = MagicMock(returncode=0)
+    with patch.object(orchestrator.subprocess, "run", return_value=fake_proc) as run:
+        orchestrator.exec_in(compose_file, service="x", command=["echo"], interactive=False, env={})
+    args = run.call_args.args[0]
+    assert "-e" not in args
+
+
 # ────────────────────────────────────────────────────────────────────
 # Host-side broker lifecycle
 # ────────────────────────────────────────────────────────────────────

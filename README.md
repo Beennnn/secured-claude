@@ -105,7 +105,7 @@ The full runtime decomposition lives in [`src/secured_claude/`](src/secured_clau
 
 ## Status — verify in 60 seconds
 
-**v0.8.3** — every claim below is backed by an artifact you can re-run yourself.
+**v0.9.0** — every claim below is backed by an artifact you can re-run yourself.
 **Don't trust the README, run the verifications.**
 
 ```bash
@@ -117,7 +117,7 @@ uv sync --all-extras
 bash bin/security-scans.sh
 #   → ruff/mypy/bandit clean ; pip-audit/grype/trivy 0 CVE ;
 #     gitleaks 0 ; hadolint/shellcheck/cerbos compile clean ;
-#     pytest 313/313, coverage 91.27 % ; SBOM 140 packages.
+#     pytest 321/321, coverage 91.27 % ; SBOM 140 packages.
 
 # 2. Live policy gate (~30 s) — boots a real Cerbos PDP and replays
 #    28 red-team + 7 happy-path scenarios end-to-end (35 total) :
@@ -140,7 +140,7 @@ secured-claude audit --denied
 #     5 ms duration, with cerbos_reason captured.
 ```
 
-### What is real now (v0.8.3)
+### What is real now (v0.9.0)
 
 | Claim | Where | How to check |
 |---|---|---|
@@ -148,7 +148,7 @@ secured-claude audit --denied
 | FastAPI broker on host:8765 | `src/secured_claude/gateway.py` (75 lines, 100 % covered) | `tests/test_gateway.py` (8 tests) |
 | Append-only SQLite audit | `src/secured_claude/store.py` (85 lines, 98 % covered) | `tests/test_store.py` includes UPDATE/DELETE refused by trigger |
 | Claude Code container hardened | `Dockerfile.claude-code` + `docker-compose.yml` (non-root UID 1001, read-only cerbos rootfs, cap_drop ALL, healthcheck) | `secured-claude doctor`, `secured-claude up` |
-| 47 ADRs justifying every decision | `docs/adr/0000-template.md` + `0001..0046-*.md` | `ls docs/adr/` |
+| 48 ADRs justifying every decision | `docs/adr/0000-template.md` + `0001..0047-*.md` | `ls docs/adr/` |
 | GitLab CI green on macbook-local runner | `.gitlab-ci.yml` + `.gitlab-ci/{lint,test,security,build,publish,release}.yml` | [pipeline #2487406196](https://gitlab.com/benoit.besson/secured-claude/-/pipelines/2487406196) |
 | 7-layer security pipeline | `bin/security-scans.sh` + `pyproject.toml [tool.bandit]` | `bash bin/security-scans.sh` |
 | SBOM (SPDX 2.3) per release | `.gitlab-ci/security.yml::security:sbom` | release artifact `sbom.spdx.json` |
@@ -164,7 +164,7 @@ The remaining gaps below are documented ahead of being live.
 | Item | v0.2 reality | When it goes live |
 |---|---|---|
 | **Audit log tamper-evidence at FS layer** | **v0.3 closed in-DB tamper-evidence** ([ADR-0024](docs/adr/0024-hash-chain-audit-log.md)) — SHA-256 chain over each row ; `audit-verify` exits non-zero on chain break. **v0.4 closes the `rm approvals.db` gap** ([ADR-0029](docs/adr/0029-external-hash-anchor.md)) — `secured-claude audit-anchor` emits a JSON commit to the latest row hash that the operator stores externally (S3 with object-lock, RFC 3161 TSA, Rekor, GPG-signed git…) ; `audit-verify-anchor` detects post-anchor tampering OR file deletion. | Done in v0.3 (in-DB) + v0.4 (external) |
-| **Multi-principal Cerbos roles** | **v0.3.1 closes this** ([ADR-0027](docs/adr/0027-multi-principal-directory.md)) — `config/principals.yaml` directory maps `principal_id` to `roles + attributes` ; broker resolves at request time so the v0.1 `derived_roles.yaml` (trusted_agent, auditor) finally activate end-to-end. Default `claude-code-default` preserves v0.2 behaviour (additive change, no break). | Done in v0.3.1 |
+| **Multi-principal Cerbos roles** | **v0.3.1 closed the directory side** ([ADR-0027](docs/adr/0027-multi-principal-directory.md)) — `config/principals.yaml` maps `principal_id` to `roles + attributes`, broker resolves at request time so `derived_roles.yaml` (trusted_agent, auditor) activate end-to-end. **v0.9.0 closes the agent side** ([ADR-0047](docs/adr/0047-multi-principal-session-activation.md)) — `secured-claude run --principal <id>` and `exec --principal <id>` thread the env override through `docker compose exec -e ...` so an operator picks the principal per-session without restarting the container. `secured-claude principal list` surfaces the catalogue. | Done in v0.3.1 (directory) + v0.9.0 (session activation) |
 | **Runtime smoke in CI** (image wiring + real LLM) | **v0.3.1 closed the wiring smoke** ([ADR-0026](docs/adr/0026-runtime-smoke-ci-gate.md)) — `smoke:runtime` pulls the 3 just-built images on every tag/main pipeline and verifies wiring without API burn. **v0.4 closes the real-LLM smoke** ([ADR-0030](docs/adr/0030-real-llm-smoke-manual-trigger.md)) — `smoke:llm-real` is a manual-trigger job on every tag pipeline ; operator sets `ANTHROPIC_API_KEY_SMOKE` (protected, masked) and clicks to run. Full-stack (broker + sidecars + Cerbos) smoke deferred to v0.4.1 (needs broker containerisation). | Done in v0.3.1 (wiring) + v0.4 (real-LLM, manual) |
 | **read_only on egress-proxy / dns-filter sidecars** | **v0.3 closes this** ([ADR-0025](docs/adr/0025-pre-built-sidecar-images.md)) — dedicated `Dockerfile.dns-filter` + `Dockerfile.egress-proxy`, packages baked in, no apk-install-at-boot. `read_only: true` is back, sidecars run as `nobody` / `tinyproxy` with minimal caps. **v0.3.1 closes the cosign signing** — both sidecar images now signed via the keyless OIDC pipeline ([ADR-0016](docs/adr/0016-supply-chain-cosign-sbom.md)) alongside the agent. | Done in v0.3 (image-level + non-root) + v0.3.1 (cosign-signed) |
 | **Multi-arch image (linux/amd64 + linux/arm64 native)** | **v0.4 closes this** ([ADR-0028](docs/adr/0028-multi-arch-images-manifest-list.md)) — per-arch Kaniko builds (amd64 + arm64) on the macbook-local runner + `crane index append` combines into a manifest-list under the canonical tag. Apple Silicon / AWS Graviton users get native arm64 ; amd64 users get native amd64. Cosign signs the index ; the signature covers both arches per cosign-on-manifest-list semantics. | Done in v0.4 |
@@ -213,9 +213,9 @@ Full honest limits in the residual-risks table in [`docs/security/threat-model.m
 >
 > - 🔒 **Sécurité** — defense-in-depth : **1 intent layer + 3 confinement layers** ([ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md)). L1 (PreToolUse hook + Cerbos PDP) is the semantic gate that understands the agent's *intent* and decides on policy. L2 (tinyproxy egress allowlist), L3 (dnsmasq DNS allowlist + workspace-only FS mount), and L4 (cap_drop + read_only + seccomp + cgroups) bound the blast radius if L1 is bypassed. Hash-chain audit log + external anchor (ADR-0024 + ADR-0029). 5 cosign-signed multi-arch images cover binary + policy bytes (ADR-0028 + ADR-0035 + ADR-0036). Optional external-IdP integration : YAML directory or HTTP fetch with TTL cache + bearer auth + stale-on-error + bounded staleness (ADR-0034 + ADR-0037 + ADR-0039), and end-to-end JWT validation against the IdP's JWKS so a malicious local process can't spoof the agent's principal_id (ADR-0038).
 > - 🤖 **IA** — Claude Code wrapped in a policy-gated container, every tool call (Read / Write / Edit / Bash / WebFetch / MCP / Task) intercepted via the native PreToolUse hook.
-> - 🏛 **Architecture** — Hexagonal-lite Python broker (host) + Cerbos PDP (container) + Claude Code CLI (container) ; clear trust boundary between intent (LLM) and execution (broker). 47 ADRs covering every security + operational decision (incl. ADR-0045 formally rejecting agent↔broker mTLS / background JWKS refresh / OTLP push as out-of-scope ; ADR-0046 shipping on-the-fly secret redaction for Read results in v0.8.0).
+> - 🏛 **Architecture** — Hexagonal-lite Python broker (host) + Cerbos PDP (container) + Claude Code CLI (container) ; clear trust boundary between intent (LLM) and execution (broker). 48 ADRs covering every security + operational decision (incl. ADR-0045 formally rejecting agent↔broker mTLS / background JWKS refresh / OTLP push as out-of-scope ; ADR-0046 shipping on-the-fly secret redaction for Read results in v0.8.0 ; ADR-0047 activating multi-principal sessions in v0.9.0).
 > - 📊 **Observabilité** — Prometheus counters + histograms at `/metrics` (loopback-only) covering JWT-deny / JWKS-degraded / stale-cache / cerbos-unavailable + end-to-end + per-stage latencies (ADR-0042 + ADR-0043). Useful for "is the broker slow ?" diagnostics via `curl /metrics` ; the SaaS-tier SLO alert framing originally in ADR-0043 was redressed in the scope-honesty pass.
-> - ✅ **Qualité** — 313 unit + integration tests, 91.27 % coverage (gate 90 %). Security audit demonstration with 28 red-team scenarios + 7 happy-paths + policy fuzz + 8 static scans, run on every release.
+> - ✅ **Qualité** — 321 unit + integration tests, 91.27 % coverage (gate 90 %). Security audit demonstration with 28 red-team scenarios + 7 happy-paths + policy fuzz + 8 static scans, run on every release.
 > - 🔄 **CI/CD** — GitLab CI 8 stages (lint / test / security / build / smoke / publish / release), audit-demo strict gate on releases, cosign keyless signing + Syft SBOM for supply-chain provenance. Tag-pipeline hardened against Docker Hub rate limits (mirror.gcr.io) + idempotent re-tag publish (twine shell-wrap).
 > - ☁️ **Infrastructure** — Cross-platform install (Mac / Linux / Windows) via pipx + GitLab Package Registry ; Docker images pinned by digest ; native multi-arch (amd64 + arm64) per ADR-0028.
 > - 🛠 **DevX** — `secured-claude` CLI feels like `claude` (TTY preserved) ; `audit` subcommand surfaces the evolving allowlist ; `doctor` validates the install end-to-end ; principal directory pluggable via env. Optional extension points (multi-issuer ALLOWLIST, mTLS on IdP fetches, per-issuer JSON config) for deployments that need them, no-op for the typical single-tenant case.
@@ -306,7 +306,7 @@ HOST                                     DOCKER (network: secured-claude-net)
                                        └──────────────────────────────────────┘
 ```
 
-Full design : see the **Technical decomposition** section above + the [47 ADRs](docs/adr/).
+Full design : see the **Technical decomposition** section above + the [48 ADRs](docs/adr/).
 
 ## Security
 
@@ -317,7 +317,7 @@ Full design : see the **Technical decomposition** section above + the [47 ADRs](
 
 ## Architecture decisions
 
-The 47 ADRs in [`docs/adr/`](docs/adr/) justify every load-bearing choice. Highlights :
+The 48 ADRs in [`docs/adr/`](docs/adr/) justify every load-bearing choice. Highlights :
 
 | # | Decision | Why it matters |
 |---|---|---|
@@ -330,6 +330,7 @@ The 47 ADRs in [`docs/adr/`](docs/adr/) justify every load-bearing choice. Highl
 | [0016](docs/adr/0016-supply-chain-cosign-sbom.md) | Cosign + SBOM | Provenance per OWASP A08:2021 |
 | [0021](docs/adr/0021-pin-claude-code-npm-version.md) | Pin Claude Code npm + Renovate | Closes the @latest hole in ADR-0008 |
 | [0046](docs/adr/0046-on-the-fly-secret-redaction.md) | On-the-fly secret redaction | Closes the content-level exfil vector — secrets in Read results never reach the LLM |
+| [0047](docs/adr/0047-multi-principal-session-activation.md) | Multi-principal session activation | `secured-claude run --principal <id>` per-session ; the v0.1 derived roles (trusted_agent, auditor) finally usable end-to-end |
 
 ## Documentation map
 
