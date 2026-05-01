@@ -10,12 +10,9 @@ The v0.7.x trajectory shipped 8 versions of progressively-more-enterprise framin
 - 🤔 **v0.7.5 — background JWKS refresh thread** — proactive re-fetch before TTL expiry. **Real value for personal proxy** : near-zero (single-user latency tail is 1 fetch every hour, not cumulative). **Cost** : threading lifecycle in FastAPI lifespan. Likely YAGNI ; could /schedule a 6-month follow-up if histograms ever show latency tail issues.
 - 🤔 **OTLP push exporter** — vendor-neutral metrics push (Datadog / Honeycomb / Grafana Cloud OTel). **Real value for personal proxy** : zero. Out of scope unless someone asks.
 
-## ☐ Honest dev-tool-focused open items
+## ☐ Open work
 
-These are the items that would actually move the needle for the project's real use case :
-
-- ☐ **More red-team scenarios in audit-demo** — the bin/security-audit.sh suite is currently 19 red-team + 7 happy-path. Easy wins : add MCP poisoning, prompt-injection-via-Read attempts, supply-chain tool-rebind scenarios. → strengthens the "secured by design" demonstration.
-- ☐ **Policy authoring UX** — `secured-claude policy lint` exists ; missing a `policy template` subcommand that scaffolds a starter policies/ tree from a profile (developer-default vs enterprise-strict). → lowers onboarding friction.
+(none — the 4 items originally listed here on 2026-04-30 were drained on 2026-05-01 across commits c157ca4, 31ffc37, 40a6b25, 1840596 : README honesty pass, CLAUDE.md scope-discipline section, 9 new red-team scenarios, `policy template` subcommand.)
 
 ## 🚫 Blocked
 
