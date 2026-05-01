@@ -16,8 +16,6 @@ These are the items that would actually move the needle for the project's real u
 
 - ☐ **More red-team scenarios in audit-demo** — the bin/security-audit.sh suite is currently 19 red-team + 7 happy-path. Easy wins : add MCP poisoning, prompt-injection-via-Read attempts, supply-chain tool-rebind scenarios. → strengthens the "secured by design" demonstration.
 - ☐ **Policy authoring UX** — `secured-claude policy lint` exists ; missing a `policy template` subcommand that scaffolds a starter policies/ tree from a profile (developer-default vs enterprise-strict). → lowers onboarding friction.
-- ☐ **README mastery-axes block honesty pass** — the top-of-file 🔒 / 🤖 / 🏛 bullets accumulated v0.7.x enterprise framing. Re-read with the scope-honesty lens and trim or qualify. → recruiter / new-contributor first impression.
-- ☐ **Honest CLAUDE.md (project-level)** — record the scope-honesty lesson : "v0.7.x trajectory was over-spec'd by autonomous-loop drift ; future autonomous waves should ground each new ADR in a concrete user-asked use case, not ADR-driven speculation". → guards against the same drift in future sessions.
 
 ## 🚫 Blocked
 
