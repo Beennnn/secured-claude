@@ -105,7 +105,7 @@ The full runtime decomposition lives in [`src/secured_claude/`](src/secured_clau
 
 ## Status — verify in 60 seconds
 
-**v0.7.4** — every claim below is backed by an artifact you can re-run yourself.
+**v0.8.3** — every claim below is backed by an artifact you can re-run yourself.
 **Don't trust the README, run the verifications.**
 
 ```bash
@@ -117,7 +117,7 @@ uv sync --all-extras
 bash bin/security-scans.sh
 #   → ruff/mypy/bandit clean ; pip-audit/grype/trivy 0 CVE ;
 #     gitleaks 0 ; hadolint/shellcheck/cerbos compile clean ;
-#     pytest 253/253, coverage 91.5 % ; SBOM 140 packages.
+#     pytest 313/313, coverage 91.27 % ; SBOM 140 packages.
 
 # 2. Live policy gate (~30 s) — boots a real Cerbos PDP and replays
 #    28 red-team + 7 happy-path scenarios end-to-end (35 total) :
@@ -140,7 +140,7 @@ secured-claude audit --denied
 #     5 ms duration, with cerbos_reason captured.
 ```
 
-### What is real now (v0.7.4)
+### What is real now (v0.8.3)
 
 | Claim | Where | How to check |
 |---|---|---|
@@ -148,7 +148,7 @@ secured-claude audit --denied
 | FastAPI broker on host:8765 | `src/secured_claude/gateway.py` (75 lines, 100 % covered) | `tests/test_gateway.py` (8 tests) |
 | Append-only SQLite audit | `src/secured_claude/store.py` (85 lines, 98 % covered) | `tests/test_store.py` includes UPDATE/DELETE refused by trigger |
 | Claude Code container hardened | `Dockerfile.claude-code` + `docker-compose.yml` (non-root UID 1001, read-only cerbos rootfs, cap_drop ALL, healthcheck) | `secured-claude doctor`, `secured-claude up` |
-| 45 ADRs justifying every decision | `docs/adr/0000-template.md` + `0001..0045-*.md` | `ls docs/adr/` |
+| 47 ADRs justifying every decision | `docs/adr/0000-template.md` + `0001..0046-*.md` | `ls docs/adr/` |
 | GitLab CI green on macbook-local runner | `.gitlab-ci.yml` + `.gitlab-ci/{lint,test,security,build,publish,release}.yml` | [pipeline #2487406196](https://gitlab.com/benoit.besson/secured-claude/-/pipelines/2487406196) |
 | 7-layer security pipeline | `bin/security-scans.sh` + `pyproject.toml [tool.bandit]` | `bash bin/security-scans.sh` |
 | SBOM (SPDX 2.3) per release | `.gitlab-ci/security.yml::security:sbom` | release artifact `sbom.spdx.json` |
@@ -213,9 +213,9 @@ Full honest limits in the residual-risks table in [`docs/security/threat-model.m
 >
 > - 🔒 **Sécurité** — defense-in-depth : **1 intent layer + 3 confinement layers** ([ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md)). L1 (PreToolUse hook + Cerbos PDP) is the semantic gate that understands the agent's *intent* and decides on policy. L2 (tinyproxy egress allowlist), L3 (dnsmasq DNS allowlist + workspace-only FS mount), and L4 (cap_drop + read_only + seccomp + cgroups) bound the blast radius if L1 is bypassed. Hash-chain audit log + external anchor (ADR-0024 + ADR-0029). 5 cosign-signed multi-arch images cover binary + policy bytes (ADR-0028 + ADR-0035 + ADR-0036). Optional external-IdP integration : YAML directory or HTTP fetch with TTL cache + bearer auth + stale-on-error + bounded staleness (ADR-0034 + ADR-0037 + ADR-0039), and end-to-end JWT validation against the IdP's JWKS so a malicious local process can't spoof the agent's principal_id (ADR-0038).
 > - 🤖 **IA** — Claude Code wrapped in a policy-gated container, every tool call (Read / Write / Edit / Bash / WebFetch / MCP / Task) intercepted via the native PreToolUse hook.
-> - 🏛 **Architecture** — Hexagonal-lite Python broker (host) + Cerbos PDP (container) + Claude Code CLI (container) ; clear trust boundary between intent (LLM) and execution (broker). 45 ADRs covering every security + operational decision (incl. ADR-0045 formally rejecting agent↔broker mTLS / background JWKS refresh / OTLP push as out-of-scope for the single-user use case).
+> - 🏛 **Architecture** — Hexagonal-lite Python broker (host) + Cerbos PDP (container) + Claude Code CLI (container) ; clear trust boundary between intent (LLM) and execution (broker). 47 ADRs covering every security + operational decision (incl. ADR-0045 formally rejecting agent↔broker mTLS / background JWKS refresh / OTLP push as out-of-scope ; ADR-0046 shipping on-the-fly secret redaction for Read results in v0.8.0).
 > - 📊 **Observabilité** — Prometheus counters + histograms at `/metrics` (loopback-only) covering JWT-deny / JWKS-degraded / stale-cache / cerbos-unavailable + end-to-end + per-stage latencies (ADR-0042 + ADR-0043). Useful for "is the broker slow ?" diagnostics via `curl /metrics` ; the SaaS-tier SLO alert framing originally in ADR-0043 was redressed in the scope-honesty pass.
-> - ✅ **Qualité** — 253 unit + integration tests, 90 % coverage gate. Security audit demonstration with 19 red-team scenarios + 7 happy-paths + policy fuzz + 8 static scans, run on every release.
+> - ✅ **Qualité** — 313 unit + integration tests, 91.27 % coverage (gate 90 %). Security audit demonstration with 28 red-team scenarios + 7 happy-paths + policy fuzz + 8 static scans, run on every release.
 > - 🔄 **CI/CD** — GitLab CI 8 stages (lint / test / security / build / smoke / publish / release), audit-demo strict gate on releases, cosign keyless signing + Syft SBOM for supply-chain provenance. Tag-pipeline hardened against Docker Hub rate limits (mirror.gcr.io) + idempotent re-tag publish (twine shell-wrap).
 > - ☁️ **Infrastructure** — Cross-platform install (Mac / Linux / Windows) via pipx + GitLab Package Registry ; Docker images pinned by digest ; native multi-arch (amd64 + arm64) per ADR-0028.
 > - 🛠 **DevX** — `secured-claude` CLI feels like `claude` (TTY preserved) ; `audit` subcommand surfaces the evolving allowlist ; `doctor` validates the install end-to-end ; principal directory pluggable via env. Optional extension points (multi-issuer ALLOWLIST, mTLS on IdP fetches, per-issuer JSON config) for deployments that need them, no-op for the typical single-tenant case.
@@ -306,7 +306,7 @@ HOST                                     DOCKER (network: secured-claude-net)
                                        └──────────────────────────────────────┘
 ```
 
-Full design : see the **Technical decomposition** section above + the [45 ADRs](docs/adr/).
+Full design : see the **Technical decomposition** section above + the [47 ADRs](docs/adr/).
 
 ## Security
 
@@ -317,7 +317,7 @@ Full design : see the **Technical decomposition** section above + the [45 ADRs](
 
 ## Architecture decisions
 
-The 45 ADRs in [`docs/adr/`](docs/adr/) justify every load-bearing choice. Highlights :
+The 47 ADRs in [`docs/adr/`](docs/adr/) justify every load-bearing choice. Highlights :
 
 | # | Decision | Why it matters |
 |---|---|---|
@@ -329,6 +329,15 @@ The 45 ADRs in [`docs/adr/`](docs/adr/) justify every load-bearing choice. Highl
 | [0022](docs/adr/0022-intent-layer-vs-confinement-layers.md) | 1 intent layer + 3 confinement layers | Honest framing — supersedes ADR-0012 |
 | [0016](docs/adr/0016-supply-chain-cosign-sbom.md) | Cosign + SBOM | Provenance per OWASP A08:2021 |
 | [0021](docs/adr/0021-pin-claude-code-npm-version.md) | Pin Claude Code npm + Renovate | Closes the @latest hole in ADR-0008 |
+| [0046](docs/adr/0046-on-the-fly-secret-redaction.md) | On-the-fly secret redaction | Closes the content-level exfil vector — secrets in Read results never reach the LLM |
+
+## Documentation map
+
+- 📦 [`CHANGELOG.md`](CHANGELOG.md) — per-version history (each entry links to the full annotated git tag)
+- 🤝 [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to set up the dev env, run the gates, write commits, propose ADRs
+- 🔒 [`docs/security/`](docs/security/) — threat model, controls matrix, supply-chain story, vulnerability disclosure, evidence
+- 🛠 [`docs/dev/`](docs/dev/) — developer environment + debug recipes (e.g. agent-container hang investigation)
+- 🏛 [`docs/adr/`](docs/adr/) — 47 architecture decision records
 
 ## License
 
