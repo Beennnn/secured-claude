@@ -210,7 +210,7 @@ def start_broker() -> int:
     health_url = f"http://{_BROKER_HOST}:{_BROKER_PORT}/health"
     while _time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(health_url, timeout=0.3) as resp:  # nosec B310
+            with urllib.request.urlopen(health_url, timeout=0.3) as resp:  # noqa: S310 — localhost  # nosec B310
                 if resp.status == 200:
                     return proc.pid
         except (urllib.error.URLError, OSError):
